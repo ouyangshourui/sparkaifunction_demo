@@ -5,12 +5,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # —— 腾讯云混元 V3 签名 ——
-    TENCENT_SECRET_ID: str = ""
-    TENCENT_SECRET_KEY: str = ""
-    HUNYUAN_HOST: str = "hunyuan.tencentcloudapi.com"
-    DEFAULT_SMALL_MODEL: str = "hunyuan-lite"
-    DEFAULT_LARGE_MODEL: str = "hunyuan-pro"
+    # —— 大模型 OpenAI 兼容协议 ——
+    # 仅需 ApiKey + BaseUrl；默认指向腾讯混元 OpenAI 兼容端点。
+    HUNYUAN_API_KEY: str = ""
+    HUNYUAN_BASE_URL: str = "https://api.hunyuan.cloud.tencent.com/v1"
+    DEFAULT_SMALL_MODEL: str = "minimax-m3"
+    DEFAULT_LARGE_MODEL: str = "minimax-m3"
 
     SPARK_MASTER: str = "local[*]"
     WAREHOUSE_PATH: str = "./warehouse"

@@ -32,9 +32,9 @@ export const clearState = () => api.post("/recovery/clear").then((r) => r.data);
 
 // —— 凭证管理 ——
 export interface CredentialsView {
-  secret_id_masked: string;
-  secret_key_set: boolean;
-  hunyuan_host: string;
+  api_key_masked: string;
+  api_key_set: boolean;
+  base_url: string;
   small_model: string;
   large_model: string;
   demo_mode: string;
@@ -42,9 +42,8 @@ export interface CredentialsView {
 }
 
 export interface CredentialsPayload {
-  secret_id: string;
-  secret_key: string;
-  hunyuan_host: string;
+  api_key: string;
+  base_url: string;
   small_model: string;
   large_model: string;
   demo_mode: string;

@@ -14,12 +14,18 @@ const DEMO_OPTIONS = [
   { v: "true", label: "true（强制 mock，离线演示）" },
 ];
 
+const BASE_PRESETS: { v: string; label: string }[] = [
+  { v: "https://api.hunyuan.cloud.tencent.com/v1", label: "腾讯混元（OpenAI 兼容）" },
+  { v: "https://tokenhub.tencentmaas.com/v1", label: "腾讯云 TokenHub" },
+  { v: "https://api.deepseek.com/v1", label: "DeepSeek" },
+  { v: "https://api.openai.com/v1", label: "OpenAI" },
+];
+
 const initial: CredentialsPayload = {
-  secret_id: "",
-  secret_key: "",
-  hunyuan_host: "hunyuan.tencentcloudapi.com",
-  small_model: "hunyuan-lite",
-  large_model: "hunyuan-pro",
+  api_key: "",
+  base_url: "https://api.hunyuan.cloud.tencent.com/v1",
+  small_model: "minimax-m3",
+  large_model: "minimax-m3",
   demo_mode: "auto",
 };
 
@@ -36,8 +42,8 @@ export default function Settings() {
       setView(v);
       setForm((f) => ({
         ...f,
-        // 不回填 secret，避免明文回传；用户重新输入
-        hunyuan_host: v.hunyuan_host || f.hunyuan_host,
+        // 不回填 api_key，避免明文回传；用户重新输入
+        base_url: v.base_url || f.base_url,
         small_model: v.small_model || f.small_model,
         large_model: v.large_model || f.large_model,
         demo_mode: v.demo_mode || f.demo_mode,
@@ -55,8 +61,8 @@ export default function Settings() {
     setForm({ ...form, [k]: v });
 
   const onSave = async () => {
-    if (!form.secret_id || !form.secret_key) {
-      setMsg({ kind: "err", text: "SecretId / SecretKey 都不能为空" });
+    if (!form.api_key) {
+      setMsg({ kind: "err", text: "ApiKey 不能为空" });
       return;
     }
     setMsg(null);
@@ -65,7 +71,7 @@ export default function Settings() {
       const r = await saveCredentials(form);
       setMsg({
         kind: "ok",
-        text: `✓ 已保存到 .env，Spark ${r.spark_restarted ? "已重启" : "未重启"}，混元 API 已生效`,
+        text: `✓ 已保存到 .env，Spark ${r.spark_restarted ? "已重启" : "未重启"}，AI Function 下次执行即走真实 API`,
       });
       await refresh();
     } catch (e: any) {
@@ -79,8 +85,8 @@ export default function Settings() {
   };
 
   const onTest = async () => {
-    if (!form.secret_id || !form.secret_key) {
-      setMsg({ kind: "err", text: "请先填入 SecretId / SecretKey 再测试" });
+    if (!form.api_key) {
+      setMsg({ kind: "err", text: "请先填入 ApiKey 再测试" });
       return;
     }
     setMsg(null);
@@ -92,7 +98,7 @@ export default function Settings() {
       if (r.ok) {
         setMsg({
           kind: "ok",
-          text: `✓ 真实调用成功（${r.elapsed_ms} ms）RequestId=${r.request_id ?? "-"}`,
+          text: `✓ 真实调用成功（${r.elapsed_ms} ms）id=${r.request_id ?? "-"}`,
         });
       } else {
         setMsg({
@@ -116,7 +122,7 @@ export default function Settings() {
       <div className="bg-bgPanel border border-border rounded p-4 flex flex-col gap-3">
         <div className="flex items-center gap-3">
           <div className="text-teal text-sm uppercase tracking-wider">
-            腾讯云混元 API 凭证
+            大模型 ApiKey（OpenAI 兼容协议）
           </div>
           {view && (
             <span
@@ -132,60 +138,80 @@ export default function Settings() {
         </div>
 
         <div className="text-textSub text-xs leading-relaxed">
-          填入腾讯云访问凭证（前往
+          只需一个 ApiKey + base_url，鉴权方式为
+          <code className="text-amber px-1">Authorization: Bearer ${`{api_key}`}</code>。
+          默认指向腾讯混元 OpenAI 兼容端点；前往
           <a
             className="text-teal underline mx-1"
-            href="https://console.cloud.tencent.com/cam/capi"
+            href="https://console.cloud.tencent.com/hunyuan/start"
             target="_blank"
           >
-            CAM 控制台
+            混元 ApiKey 控制台
           </a>
-          创建 / 查看）。保存后会写入 backend/.env 并重启 SparkSession，
+          创建。保存后会写入 backend/.env 并重启 SparkSession，
           <code className="text-amber px-1">ai_classify / ai_extract / ai_complete</code>
-          下一次执行即走真实混元 API。
+          下一次执行即走真实 API。
         </div>
 
         {view && (
-          <div className="bg-bgPanel2 border border-border rounded p-2 text-xs grid grid-cols-2 gap-2">
-            <div>
-              <span className="text-textSub">当前 SecretId：</span>
-              <span className="font-mono text-textMain">
-                {view.secret_id_masked || "(未设置)"}
-              </span>
-            </div>
-            <div>
-              <span className="text-textSub">SecretKey：</span>
-              <span className="font-mono text-textMain">
-                {view.secret_key_set ? "********（已设置）" : "(未设置)"}
-              </span>
-            </div>
+          <div className="bg-bgPanel2 border border-border rounded p-2 text-xs">
+            <span className="text-textSub">当前 ApiKey：</span>
+            <span className="font-mono text-textMain">
+              {view.api_key_masked || "(未设置)"}
+            </span>
           </div>
         )}
 
-        <Field label="SecretId">
-          <input
-            className={input}
-            placeholder="AKIDxxxxxxxxxxxxxxxx"
-            value={form.secret_id}
-            onChange={(e) => set("secret_id", e.target.value.trim())}
-          />
-        </Field>
-        <Field label="SecretKey">
+        <Field label="ApiKey">
           <input
             type="password"
             className={input}
-            placeholder="保存时才会落盘；测试时直接走签名调用"
-            value={form.secret_key}
-            onChange={(e) => set("secret_key", e.target.value.trim())}
+            placeholder="sk-xxxxxxxxxxxxxxxx"
+            value={form.api_key}
+            onChange={(e) => set("api_key", e.target.value.trim())}
           />
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="API Host">
+        <Field label="Base URL（OpenAI 兼容端点，不要带尾部 /chat/completions）">
+          <div className="flex flex-col gap-1.5">
             <input
               className={input}
-              value={form.hunyuan_host}
-              onChange={(e) => set("hunyuan_host", e.target.value.trim())}
+              placeholder="https://api.hunyuan.cloud.tencent.com/v1"
+              value={form.base_url}
+              onChange={(e) => set("base_url", e.target.value.trim())}
+            />
+            <div className="flex gap-1.5 flex-wrap">
+              {BASE_PRESETS.map((p) => (
+                <button
+                  key={p.v}
+                  type="button"
+                  onClick={() => set("base_url", p.v)}
+                  className={`text-xs px-2 py-0.5 rounded border ${
+                    form.base_url === p.v
+                      ? "border-teal text-teal"
+                      : "border-border text-textSub hover:text-teal hover:border-teal"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </Field>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Small Model（小模型）">
+            <input
+              className={input}
+              value={form.small_model}
+              onChange={(e) => set("small_model", e.target.value.trim())}
+            />
+          </Field>
+          <Field label="Large Model（大模型）">
+            <input
+              className={input}
+              value={form.large_model}
+              onChange={(e) => set("large_model", e.target.value.trim())}
             />
           </Field>
           <Field label="Demo Mode 兜底策略">
@@ -200,20 +226,6 @@ export default function Settings() {
                 </option>
               ))}
             </select>
-          </Field>
-          <Field label="Small Model（小模型）">
-            <input
-              className={input}
-              value={form.small_model}
-              onChange={(e) => set("small_model", e.target.value.trim())}
-            />
-          </Field>
-          <Field label="Large Model（大模型）">
-            <input
-              className={input}
-              value={form.large_model}
-              onChange={(e) => set("large_model", e.target.value.trim())}
-            />
           </Field>
         </div>
 
@@ -248,13 +260,14 @@ export default function Settings() {
       {/* 右：测试结果 */}
       <div className="bg-bgPanel border border-border rounded p-4 overflow-auto">
         <div className="text-teal text-sm uppercase tracking-wider mb-3">
-          混元 API 实测响应
+          大模型 API 实测响应
         </div>
 
         {!test && (
           <div className="text-textSub text-xs">
-            点击左侧「测试连接」会用 <code>hunyuan-lite</code> 走一次真实
-            ChatCompletions 调用，返回原始 Response。
+            点击左侧「测试连接」会用 <code>{form.small_model}</code> 走一次真实
+            <code className="px-1">POST {form.base_url || "<base_url>"}/chat/completions</code>
+            ，返回原始 JSON。
           </div>
         )}
 
@@ -267,7 +280,7 @@ export default function Settings() {
                 tone={test.ok ? "ok" : "err"}
               />
               <Stat label="耗时" value={`${test.elapsed_ms} ms`} />
-              <Stat label="RequestId" value={test.request_id || "-"} />
+              <Stat label="ID / RequestId" value={test.request_id || "-"} />
               <Stat
                 label="错误码"
                 value={test.error_code || "-"}
@@ -290,14 +303,14 @@ export default function Settings() {
                 <pre className="bg-bgPanel2 border border-amber rounded p-3 text-amber text-xs whitespace-pre-wrap">
                   {test.error_message}
                 </pre>
-                {test.error_code === "AuthFailure.SignatureFailure" && (
-                  <Tip text="签名校验失败：请检查 SecretId/SecretKey 是否粘贴完整、首尾是否带空格。" />
+                {test.error_code?.startsWith("HTTP_401") && (
+                  <Tip text="ApiKey 无效或未授权：请检查 sk- 前缀的 Key 是否完整、是否在控制台已激活。" />
                 )}
-                {test.error_code === "FailedOperation.ServiceNotActivated" && (
-                  <Tip text="该腾讯云账号尚未开通混元服务，请到 https://console.cloud.tencent.com/hunyuan 开通后再试。" />
+                {test.error_code?.startsWith("HTTP_403") && (
+                  <Tip text="账号未开通该模型：去对应控制台开通后再试。" />
                 )}
-                {test.error_code?.startsWith("AuthFailure") && (
-                  <Tip text="鉴权失败：确认密钥所属账号的 CAM 已授予 hunyuan:* 权限。" />
+                {test.error_code === "EXCEPTION" && (
+                  <Tip text="网络异常：检查 base_url 是否填写正确、当前网络能否访问该域名。" />
                 )}
               </div>
             )}
