@@ -1,0 +1,41 @@
+# --- 大文件 / 二进制（不入库）---
+spark-dist/
+.mvn-home/
+**/target/
+**/.ivy2/
+**/node_modules/
+**/dist/
+**/build/
+**/.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# --- 运行时产物 ---
+warehouse/
+spark-warehouse/
+metastore_db/
+derby.log
+*.log
+/tmp/
+.DS_Store
+
+# --- IDE ---
+.idea/
+.vscode/
+*.iml
+
+# --- 敏感信息 ---
+.env
+*.local
+
+# --- ANTLR 自动生成代码（每次 mvn 重新生成）---
+spark-extension/src/main/java/org/apache/spark/sql/aifn/parser/gen/
+spark-extension/src/main/java/*.tokens
+
+# --- frontend ---
+frontend/.vite/
+frontend/package-lock.json
