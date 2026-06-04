@@ -3,12 +3,14 @@ import Workbench from "./pages/Workbench";
 import Functions from "./pages/Functions";
 import Monitor from "./pages/Monitor";
 import Recovery from "./pages/Recovery";
+import Settings from "./pages/Settings";
 
 const NAV = [
   { to: "/", label: "Workbench" },
   { to: "/functions", label: "Functions" },
   { to: "/monitor", label: "Monitor" },
   { to: "/recovery", label: "Recovery" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export default function App() {
@@ -45,6 +47,7 @@ export default function App() {
           <Route path="/functions" element={<Functions />} />
           <Route path="/monitor" element={<Monitor />} />
           <Route path="/recovery" element={<Recovery />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
     </div>

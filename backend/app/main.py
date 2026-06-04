@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import credentials as credentials_api
 from app.api import functions as functions_api
 from app.api import metrics as metrics_api
 from app.api import recovery as recovery_api
@@ -51,6 +52,7 @@ app.include_router(sql_api.router, prefix="/api/sql", tags=["sql"])
 app.include_router(functions_api.router, prefix="/api/functions", tags=["functions"])
 app.include_router(metrics_api.router, prefix="/api/metrics", tags=["metrics"])
 app.include_router(recovery_api.router, prefix="/api/recovery", tags=["recovery"])
+app.include_router(credentials_api.router, prefix="/api/credentials", tags=["credentials"])
 
 
 @app.get("/api/health")

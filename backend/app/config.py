@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     WAREHOUSE_PATH: str = "./warehouse"
     STATE_TABLE: str = "ai_function_state"
     AIFN_JAR_PATH: str = "../spark-extension/target/aifn-spark-extension-0.1.0.jar"
+    AIFN_DEMO_MODE: str = "auto"
 
     BATCH_MAX_SIZE: int = 16
     BATCH_MAX_WAIT_MS: int = 200

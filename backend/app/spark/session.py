@@ -17,6 +17,7 @@ def build_spark() -> SparkSession:
     os.environ["TENCENT_SECRET_ID"] = settings.TENCENT_SECRET_ID
     os.environ["TENCENT_SECRET_KEY"] = settings.TENCENT_SECRET_KEY
     os.environ["HUNYUAN_HOST"] = settings.HUNYUAN_HOST
+    os.environ["AIFN_DEMO_MODE"] = settings.AIFN_DEMO_MODE
 
     # 强制 PySpark worker 使用当前 venv 的 python（避免 driver=3.13 worker=3.14 错位）
     py_exe = sys.executable  # 当前进程 python，即 venv/bin/python
@@ -64,6 +65,7 @@ def build_spark() -> SparkSession:
         .config("spark.executorEnv.TENCENT_SECRET_ID", settings.TENCENT_SECRET_ID)
         .config("spark.executorEnv.TENCENT_SECRET_KEY", settings.TENCENT_SECRET_KEY)
         .config("spark.executorEnv.HUNYUAN_HOST", settings.HUNYUAN_HOST)
+        .config("spark.executorEnv.AIFN_DEMO_MODE", settings.AIFN_DEMO_MODE)
     )
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")

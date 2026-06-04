@@ -29,3 +29,42 @@ export const getMetrics = () => api.get("/metrics").then((r) => r.data);
 export const replay = () => api.post("/recovery/replay").then((r) => r.data);
 export const listState = () => api.get("/recovery/state").then((r) => r.data);
 export const clearState = () => api.post("/recovery/clear").then((r) => r.data);
+
+// —— 凭证管理 ——
+export interface CredentialsView {
+  secret_id_masked: string;
+  secret_key_set: boolean;
+  hunyuan_host: string;
+  small_model: string;
+  large_model: string;
+  demo_mode: string;
+  configured: boolean;
+}
+
+export interface CredentialsPayload {
+  secret_id: string;
+  secret_key: string;
+  hunyuan_host: string;
+  small_model: string;
+  large_model: string;
+  demo_mode: string;
+}
+
+export interface TestResponse {
+  ok: boolean;
+  request_id?: string | null;
+  text?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  elapsed_ms: number;
+  raw?: any;
+}
+
+export const getCredentials = () =>
+  api.get<CredentialsView>("/credentials").then((r) => r.data);
+
+export const saveCredentials = (p: CredentialsPayload) =>
+  api.put<{ ok: boolean; saved: boolean; spark_restarted: boolean }>("/credentials", p).then((r) => r.data);
+
+export const testCredentials = (p: CredentialsPayload) =>
+  api.post<TestResponse>("/credentials/test", p).then((r) => r.data);
