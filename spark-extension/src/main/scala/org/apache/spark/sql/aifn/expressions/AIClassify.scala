@@ -10,7 +10,7 @@ import org.apache.spark.unsafe.types.UTF8String
  * AIClassify(text, ARRAY<STRING>)：把文本归到给定标签集中。
  * 内置 prompt：从给定类别中选最匹配的那个，只输出类别名。
  */
-case class AIClassify(text: Expression, labels: Expression, model: String = "hunyuan-lite")
+case class AIClassify(text: Expression, labels: Expression, model: String = AIClassify.defaultModel)
     extends BinaryExpression with CodegenFallback {
 
   override def left: Expression = text
@@ -36,11 +36,19 @@ case class AIClassify(text: Expression, labels: Expression, model: String = "hun
     val arr = labelsVal.asInstanceOf[org.apache.spark.sql.catalyst.util.ArrayData]
     val labelList = (0 until arr.numElements()).map(i => arr.getUTF8String(i).toString)
     val prompt = s"请从以下类别中选择一个最匹配的：${labelList.mkString("、")}。文本：${t}\n只输出类别名，不要解释。"
-    val out = InferenceClient.singleton.completeBlocking(prompt, model)
-    UTF8String.fromString(out.trim)
+    val r = InferenceClient.singleton.completeWith(prompt, model, jsonMode = false, funcName = "ai_classify")
+    UTF8String.fromString(r.text.trim)
   }
 
   override protected def withNewChildrenInternal(
       newLeft: Expression, newRight: Expression): AIClassify =
     copy(text = newLeft, labels = newRight)
+}
+
+object AIClassify {
+  /** 从环境变量读默认小模型；与后端 settings.DEFAULT_SMALL_MODEL 透传保持一致。 */
+  def defaultModel: String =
+    Option(System.getenv("AIFN_DEFAULT_SMALL_MODEL"))
+      .orElse(Option(System.getenv("HUNYUAN_DEFAULT_SMALL_MODEL")))
+      .getOrElse("hy-mt2-pro")
 }

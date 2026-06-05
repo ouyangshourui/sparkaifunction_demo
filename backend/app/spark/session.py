@@ -17,6 +17,8 @@ def build_spark() -> SparkSession:
     os.environ["HUNYUAN_API_KEY"] = settings.HUNYUAN_API_KEY
     os.environ["HUNYUAN_BASE_URL"] = settings.HUNYUAN_BASE_URL
     os.environ["AIFN_DEMO_MODE"] = settings.AIFN_DEMO_MODE
+    os.environ["AIFN_DEFAULT_SMALL_MODEL"] = settings.DEFAULT_SMALL_MODEL
+    os.environ["AIFN_DEFAULT_LARGE_MODEL"] = settings.DEFAULT_LARGE_MODEL
 
     # 强制 PySpark worker 使用当前 venv 的 python
     py_exe = sys.executable
@@ -59,6 +61,8 @@ def build_spark() -> SparkSession:
         .config("spark.executorEnv.HUNYUAN_API_KEY", settings.HUNYUAN_API_KEY)
         .config("spark.executorEnv.HUNYUAN_BASE_URL", settings.HUNYUAN_BASE_URL)
         .config("spark.executorEnv.AIFN_DEMO_MODE", settings.AIFN_DEMO_MODE)
+        .config("spark.executorEnv.AIFN_DEFAULT_SMALL_MODEL", settings.DEFAULT_SMALL_MODEL)
+        .config("spark.executorEnv.AIFN_DEFAULT_LARGE_MODEL", settings.DEFAULT_LARGE_MODEL)
     )
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")

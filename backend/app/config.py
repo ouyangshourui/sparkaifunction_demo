@@ -8,9 +8,10 @@ class Settings(BaseSettings):
     # —— 大模型 OpenAI 兼容协议 ——
     # 仅需 ApiKey + BaseUrl；默认指向腾讯混元 OpenAI 兼容端点。
     HUNYUAN_API_KEY: str = ""
-    HUNYUAN_BASE_URL: str = "https://api.hunyuan.cloud.tencent.com/v1"
-    DEFAULT_SMALL_MODEL: str = "minimax-m3"
-    DEFAULT_LARGE_MODEL: str = "minimax-m3"
+    HUNYUAN_BASE_URL: str = "https://tokenhub.tencentmaas.com/v1"
+    # 默认值见 models_catalog.CATALOG；UI 展示名 "Hy-MT2-Pro" / "Hy3 Preview"
+    DEFAULT_SMALL_MODEL: str = "hy-mt2-pro"
+    DEFAULT_LARGE_MODEL: str = "hy3-preview"
 
     SPARK_MASTER: str = "local[*]"
     WAREHOUSE_PATH: str = "./warehouse"

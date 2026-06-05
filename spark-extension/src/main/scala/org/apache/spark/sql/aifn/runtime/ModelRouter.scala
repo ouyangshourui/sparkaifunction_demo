@@ -5,7 +5,7 @@ import scala.util.Try
 /**
  * ModelRouter：自适应级联。
  *
- * 模式：cascade(small=hunyuan-lite, large=hunyuan-pro, threshold=0.85)
+ * 模式：cascade(small=hy-mt2-pro, large=hy3-preview, threshold=0.85)
  * 流程：先调 small；若不置信（JSON 解析失败 / 长度异常 / PPL 估算高），升级到 large。
  *
  * 这是我们对标 Databricks ai_query / Snowflake Cortex 的差异化能力 ——

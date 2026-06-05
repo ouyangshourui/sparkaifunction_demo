@@ -10,7 +10,7 @@ import org.apache.spark.sql.types._
  * 与 UDF 形态不同：UDF 在优化器看来是一团黑盒 ScalaUDF，无法分析其代价、批量、合并。
  * AIInference 暴露：
  *   - functionName : 调用的 AI 函数（ai_complete / ai_classify / ai_extract / 用户 DDL 注册的）
- *   - model        : 模型标识（hunyuan-lite / hunyuan-pro / cascade(...)）
+ *   - model        : 模型标识（hy-mt2-pro / hy3-preview / cascade(...)）
  *   - inputs       : 入参表达式列表（Catalyst 可以做谓词下推 / 列裁剪 / 表达式折叠）
  *   - outputAttr   : 产出列（可下游引用）
  *   - options      : 治理参数（QPS / token_budget / router 配置）

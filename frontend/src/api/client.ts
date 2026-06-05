@@ -15,8 +15,47 @@ export interface SqlResult {
 export const executeSql = (sql: string, limit = 100) =>
   api.post<SqlResult>("/sql/execute", { sql, limit }).then((r) => r.data);
 
+export interface PlanNode {
+  name: string;
+  simple: string;
+  category: "ai" | "scan" | "filter" | "project" | "limit" | "shuffle" | "other";
+  pushedFilters?: string[] | null;
+  runtimeFilters?: string[] | null;
+  output?: string[] | null;
+  table?: string | null;
+  condition?: string | null;
+  aiExpressions?: string[] | null;
+  children: PlanNode[];
+}
+
+export interface ExplainResult {
+  plan: string;
+  tree: PlanNode;
+  plan_baseline?: string;
+  tree_baseline?: PlanNode | null;
+  plan_pushdown?: string;
+  tree_pushdown?: PlanNode | null;
+  plan_optimized?: string;
+  sections?: {
+    parsed?: string;
+    analyzed?: string;
+    optimized?: string;
+    physical?: string;
+  };
+  diff?: {
+    baseline_pushed_filters?: string[] | null;
+    optimized_pushed_filters?: string[] | null;
+    baseline_ai_position?: string;
+    optimized_ai_position?: string;
+    baseline_lines?: number;
+    pushdown_lines?: number;
+    optimized_lines?: number;
+    limit_pushed_below_ai?: boolean;
+  };
+}
+
 export const explainSql = (sql: string) =>
-  api.post<{ plan: string }>("/sql/explain", { sql, limit: 1 }).then((r) => r.data);
+  api.post<ExplainResult>("/sql/explain", { sql, limit: 1 }).then((r) => r.data);
 
 export const listFunctions = () =>
   api.get<{ name: string }[]>("/functions").then((r) => r.data);
@@ -24,11 +63,57 @@ export const listFunctions = () =>
 export const createFunction = (payload: any) =>
   api.post("/functions", payload).then((r) => r.data);
 
-export const getMetrics = () => api.get("/metrics").then((r) => r.data);
+export interface MetricsSnapshot {
+  tokens_by_model?: Record<string, number>;
+  prompt_tokens_by_model?: Record<string, number>;
+  completion_tokens_by_model?: Record<string, number>;
+  calls_by_model?: Record<string, number>;
+  latency_ms_by_model?: Record<string, number>;
+  routed_distribution?: Record<string, number>;
+  total_tokens?: number;
+  total_prompt_tokens?: number;
+  total_completion_tokens?: number;
+  total_calls?: number;
+  total_latency_ms?: number;
+  avg_latency_ms?: number;
+  token_budget?: number;
+  qps_limit?: number;
+  budget_exhausted?: boolean;
+}
 
-export const replay = () => api.post("/recovery/replay").then((r) => r.data);
-export const listState = () => api.get("/recovery/state").then((r) => r.data);
-export const clearState = () => api.post("/recovery/clear").then((r) => r.data);
+export const getMetrics = () => api.get<MetricsSnapshot>("/metrics").then((r) => r.data);
+export const resetMetrics = () => api.post("/metrics/reset").then((r) => r.data);
+
+export interface StateView {
+  cached_count: number;
+  audit_pending: number;
+  persisted_count: number;
+  table: string;
+  sample: { hash: string; preview: string }[];
+  error?: string;
+}
+
+export const replay = () =>
+  api.post<{
+    ok: boolean;
+    before: number;
+    flushed: number;
+    cleared: number;
+    loaded: number;
+    message: string;
+  }>("/recovery/replay").then((r) => r.data);
+
+export const listState = () =>
+  api.get<StateView>("/recovery/state").then((r) => r.data);
+
+export const clearState = () =>
+  api.post<{ cleared: number }>("/recovery/clear").then((r) => r.data);
+
+export const flushDelta = () =>
+  api.post<{ flushed: number; table: string }>("/recovery/flush-delta").then((r) => r.data);
+
+export const loadDelta = () =>
+  api.post<{ loaded: number; table: string }>("/recovery/load-delta").then((r) => r.data);
 
 // —— 凭证管理 ——
 export interface CredentialsView {

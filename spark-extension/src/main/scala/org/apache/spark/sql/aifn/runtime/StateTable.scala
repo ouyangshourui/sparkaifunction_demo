@@ -53,6 +53,9 @@ class StateTable(val tableName: String) {
 
 object StateTable {
 
+  /** Iceberg 默认持久化表名（Recovery API / Expression 共用）。 */
+  val defaultTableName: String = "ai_inference_state"
+
   private val globalCache = new ConcurrentHashMap[String, String]()
 
   case class AuditEntry(
@@ -91,6 +94,9 @@ object StateTable {
     globalCache.clear()
     n
   }
+
+  /** 当前还未 flush 到 Iceberg 的 audit 条数。 */
+  def auditPendingCount(): Int = auditLog.size()
 
   /** 把缓存以可读形式吐出（Recovery 面板用） */
   def listCache(): java.util.Map[String, String] =

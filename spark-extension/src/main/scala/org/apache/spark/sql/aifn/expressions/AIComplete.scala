@@ -14,7 +14,7 @@ import org.apache.spark.unsafe.types.UTF8String
  * 正常路径：CatalystOptimizer 会把 SELECT 中的 ai_complete(col) 提取为 AIInference 节点，
  * 由 AIInferenceStrategy 翻译为 AIInferenceExec 物理算子，享受批处理 / 路由 / 状态恢复。
  */
-case class AIComplete(prompt: Expression, model: String = "hunyuan-lite")
+case class AIComplete(prompt: Expression, model: String = AIComplete.defaultModel)
     extends UnaryExpression with CodegenFallback {
 
   override def child: Expression = prompt
@@ -24,10 +24,17 @@ case class AIComplete(prompt: Expression, model: String = "hunyuan-lite")
 
   override def nullSafeEval(input: Any): Any = {
     val text = input.asInstanceOf[UTF8String].toString
-    val out = InferenceClient.singleton.completeBlocking(text, model)
-    UTF8String.fromString(out)
+    val r = InferenceClient.singleton.completeWith(text, model, jsonMode = false, funcName = "ai_complete")
+    UTF8String.fromString(r.text)
   }
 
   override protected def withNewChildInternal(newChild: Expression): AIComplete =
     copy(prompt = newChild)
+}
+
+object AIComplete {
+  def defaultModel: String =
+    Option(System.getenv("AIFN_DEFAULT_SMALL_MODEL"))
+      .orElse(Option(System.getenv("HUNYUAN_DEFAULT_SMALL_MODEL")))
+      .getOrElse("hy-mt2-pro")
 }

@@ -79,10 +79,45 @@ class HunyuanClient(apiKey: String, baseUrl: String) {
     s"[demo-mode] mocked response for: ${prompt.take(40)}"
   }
 
-  /** 同步调用 OpenAI 兼容 ChatCompletions。 */
-  def complete(prompt: String, model: String, jsonMode: Boolean = false): Result = {
+  /** 把这次调用上报给全局 Governance（如果已初始化），用于 /api/metrics 实时显示。 */
+  private def recordToGovernance(model: String, pt: Int, ct: Int, latencyMs: Long, routed: String): Unit = {
+    try {
+      val opt = Governance.instance
+      if (opt.isDefined) opt.get.record(model, pt, ct, latencyMs, routed)
+    } catch { case _: Throwable => /* 不影响主流程 */ }
+  }
+
+  /** 同步调用 OpenAI 兼容 ChatCompletions（Expression 入口；自动经过 StateTable 幂等层）。 */
+  def complete(prompt: String, model: String, jsonMode: Boolean = false): Result =
+    completeWith(prompt, model, jsonMode, funcName = "ai_function")
+
+  /**
+   * Expression 友好入口：在真正调用网关前做 prompt_hash 查询，命中则零 token 返回；
+   * 未命中正常调用，并把结果写回 StateTable.cache + audit。
+   */
+  def completeWith(prompt: String, model: String, jsonMode: Boolean, funcName: String): Result = {
+    val state = StateTable.handle(StateTable.defaultTableName)
+    val hash = state.computeHash(funcName, model, prompt)
+    state.lookup(hash) match {
+      case Some(cached) =>
+        val r = Result(cached, 0, 0, 0L, s"$model[cache]")
+        recordToGovernance(r.model, 0, 0, 0L, "cache_hit")
+        return r
+      case None => // fall through
+    }
+
+    val r = doComplete(prompt, model, jsonMode)
+    // 仅 SUCCESS 路径写 cache（demo / fallback 也写，因为对幂等演示同样有效）
+    state.upsert(hash, funcName, r.model, prompt, r.text, status = "SUCCESS")
+    r
+  }
+
+  /** 实际网关调用（保留原逻辑不变）。 */
+  private def doComplete(prompt: String, model: String, jsonMode: Boolean): Result = {
     if (demoMode == "true" || (demoMode != "false" && keyMissing)) {
-      return Result(mockComplete(prompt), prompt.length, 16, 5L, s"$model[demo]")
+      val r = Result(mockComplete(prompt), prompt.length, 16, 5L, s"$model[demo]")
+      recordToGovernance(r.model, r.promptTokens, r.completionTokens, r.latencyMs, "demo")
+      return r
     }
 
     val messages = new java.util.ArrayList[java.util.Map[String, String]]()
@@ -135,12 +170,22 @@ class HunyuanClient(apiKey: String, baseUrl: String) {
       } finally resp.close()
     }
 
-    if (demoMode == "false") return realCall()
+    if (demoMode == "false") {
+      val r = realCall()
+      recordToGovernance(r.model, r.promptTokens, r.completionTokens, r.latencyMs, "small_only")
+      return r
+    }
 
-    try realCall() catch {
+    try {
+      val r = realCall()
+      recordToGovernance(r.model, r.promptTokens, r.completionTokens, r.latencyMs, "small_only")
+      r
+    } catch {
       case _: RuntimeException =>
-        Result(mockComplete(prompt), prompt.length, 16,
-          (System.nanoTime() - t0) / 1000000L, s"$model[demo-fallback]")
+        val latency = (System.nanoTime() - t0) / 1000000L
+        val r = Result(mockComplete(prompt), prompt.length, 16, latency, s"$model[demo-fallback]")
+        recordToGovernance(r.model, r.promptTokens, r.completionTokens, r.latencyMs, "fallback")
+        r
     }
   }
 

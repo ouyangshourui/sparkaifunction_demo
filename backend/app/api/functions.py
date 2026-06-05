@@ -11,7 +11,7 @@ class CreateAIFnRequest(BaseModel):
     name: str
     params: list[dict]      # [{"col":"text","type":"STRING"}]
     return_type: str        # 例：STRING / STRUCT<...>
-    model: str              # hunyuan-pro / cascade(...)
+    model: str              # hy3-preview / cascade(...)
     prompt: str
     options: dict[str, str] = {}
 

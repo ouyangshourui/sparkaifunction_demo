@@ -20,6 +20,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.models_catalog import CATALOG, normalize, to_dict
 
 router = APIRouter()
 
@@ -40,11 +41,11 @@ class CredentialsView(BaseModel):
 class CredentialsPayload(BaseModel):
     api_key: str = Field(..., description="OpenAI 兼容 ApiKey（Bearer Token）")
     base_url: str = Field(
-        "https://api.hunyuan.cloud.tencent.com/v1",
-        description="OpenAI 兼容 base_url，例如腾讯混元: https://api.hunyuan.cloud.tencent.com/v1",
+        "https://tokenhub.tencentmaas.com/v1",
+        description="OpenAI 兼容 base_url，例如腾讯云 TokenHub: https://tokenhub.tencentmaas.com/v1",
     )
-    small_model: str = Field("minimax-m3")
-    large_model: str = Field("minimax-m3")
+    small_model: str = Field("hy-mt2-pro", description="小模型 id（网关接受小写连字符形式）")
+    large_model: str = Field("hy3-preview", description="大模型 id（网关接受小写连字符形式）")
     demo_mode: str = Field("auto", description="auto / true / false")
 
 
@@ -100,6 +101,18 @@ def _normalize_base(url: str) -> str:
 
 
 # ---------- Routes ----------
+@router.get("/models")
+def get_models() -> dict:
+    """模型目录：友好名 ↔ 网关 ID 映射，给前端 Settings 渲染下拉/标签用。"""
+    return {
+        "models": [to_dict(m) for m in CATALOG],
+        "defaults": {
+            "small": settings.DEFAULT_SMALL_MODEL,
+            "large": settings.DEFAULT_LARGE_MODEL,
+        },
+    }
+
+
 @router.get("", response_model=CredentialsView)
 def get_credentials() -> CredentialsView:
     key = settings.HUNYUAN_API_KEY or ""
@@ -118,11 +131,14 @@ def get_credentials() -> CredentialsView:
 def put_credentials(payload: CredentialsPayload, request: Request) -> dict:
     """落 .env + 更新 settings + 更新 os.environ + 重启 Spark 让 executorEnv 生效。"""
     base_url = _normalize_base(payload.base_url)
+    # 用户可能写 Hy3 preview / Hy-MT2-Pro 友好名 → 规范成网关 id
+    small_id = normalize(payload.small_model, default="hy-mt2-pro")
+    large_id = normalize(payload.large_model, default="hy3-preview")
     updates = {
         "HUNYUAN_API_KEY": payload.api_key,
         "HUNYUAN_BASE_URL": base_url,
-        "DEFAULT_SMALL_MODEL": payload.small_model,
-        "DEFAULT_LARGE_MODEL": payload.large_model,
+        "DEFAULT_SMALL_MODEL": small_id,
+        "DEFAULT_LARGE_MODEL": large_id,
         "AIFN_DEMO_MODE": payload.demo_mode,
     }
     _write_env_file(updates)
@@ -130,8 +146,8 @@ def put_credentials(payload: CredentialsPayload, request: Request) -> dict:
     # 更新进程内 settings
     settings.HUNYUAN_API_KEY = payload.api_key
     settings.HUNYUAN_BASE_URL = base_url
-    settings.DEFAULT_SMALL_MODEL = payload.small_model
-    settings.DEFAULT_LARGE_MODEL = payload.large_model
+    settings.DEFAULT_SMALL_MODEL = small_id
+    settings.DEFAULT_LARGE_MODEL = large_id
     settings.AIFN_DEMO_MODE = payload.demo_mode
 
     # 同步 os.environ（driver 进程立即生效；executor 在 local 模式同进程也能看到）
@@ -173,7 +189,7 @@ def test_credentials(payload: CredentialsPayload) -> TestResponse:
     """用当前请求体凭证直接走 OpenAI 兼容协议调一次 chat/completions。"""
     base_url = _normalize_base(payload.base_url)
     body = {
-        "model": payload.small_model or "minimax-m3",
+        "model": normalize(payload.small_model, default="hy-mt2-pro"),
         "messages": [
             {"role": "user", "content": "请用一句话回复：你好，混元。"}
         ],

@@ -6,7 +6,7 @@ export default function Functions() {
   const [form, setForm] = useState({
     name: "review_tag",
     return_type: "STRING",
-    model: "cascade(small=hunyuan-lite, large=hunyuan-pro, threshold=0.85)",
+    model: "cascade(small=hy-mt2-pro, large=hy3-preview, threshold=0.85)",
     prompt: "请用一个词标注情感：{text}",
   });
   const [msg, setMsg] = useState("");

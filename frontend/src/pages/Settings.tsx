@@ -15,17 +15,31 @@ const DEMO_OPTIONS = [
 ];
 
 const BASE_PRESETS: { v: string; label: string }[] = [
-  { v: "https://api.hunyuan.cloud.tencent.com/v1", label: "腾讯混元（OpenAI 兼容）" },
   { v: "https://tokenhub.tencentmaas.com/v1", label: "腾讯云 TokenHub" },
+  { v: "https://api.hunyuan.cloud.tencent.com/v1", label: "腾讯混元（OpenAI 兼容）" },
   { v: "https://api.deepseek.com/v1", label: "DeepSeek" },
   { v: "https://api.openai.com/v1", label: "OpenAI" },
 ];
 
+// 与后端 models_catalog 保持一致；UI 显示 label，请求发 id
+const MODEL_PRESETS = {
+  large: [
+    { id: "hy3-preview", label: "Hy3 Preview" },
+    { id: "hy-mt2-pro", label: "Hy-MT2-Pro" },
+    { id: "minimax-m3", label: "MiniMax M3" },
+  ],
+  small: [
+    { id: "hy-mt2-pro", label: "Hy-MT2-Pro" },
+    { id: "hy3-preview", label: "Hy3 Preview" },
+    { id: "minimax-m3", label: "MiniMax M3" },
+  ],
+};
+
 const initial: CredentialsPayload = {
   api_key: "",
-  base_url: "https://api.hunyuan.cloud.tencent.com/v1",
-  small_model: "minimax-m3",
-  large_model: "minimax-m3",
+  base_url: "https://tokenhub.tencentmaas.com/v1",
+  small_model: "hy-mt2-pro",
+  large_model: "hy3-preview",
   demo_mode: "auto",
 };
 
@@ -200,19 +214,55 @@ export default function Settings() {
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Small Model（小模型）">
-            <input
-              className={input}
-              value={form.small_model}
-              onChange={(e) => set("small_model", e.target.value.trim())}
-            />
+          <Field label="Small Model（小模型 · 默认 Hy-MT2-Pro）">
+            <div className="flex flex-col gap-1.5">
+              <input
+                className={input}
+                value={form.small_model}
+                onChange={(e) => set("small_model", e.target.value.trim())}
+              />
+              <div className="flex gap-1.5 flex-wrap">
+                {MODEL_PRESETS.small.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => set("small_model", m.id)}
+                    className={`text-xs px-2 py-0.5 rounded border ${
+                      form.small_model === m.id
+                        ? "border-teal text-teal"
+                        : "border-border text-textSub hover:text-teal hover:border-teal"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </Field>
-          <Field label="Large Model（大模型）">
-            <input
-              className={input}
-              value={form.large_model}
-              onChange={(e) => set("large_model", e.target.value.trim())}
-            />
+          <Field label="Large Model（大模型 · 默认 Hy3 Preview）">
+            <div className="flex flex-col gap-1.5">
+              <input
+                className={input}
+                value={form.large_model}
+                onChange={(e) => set("large_model", e.target.value.trim())}
+              />
+              <div className="flex gap-1.5 flex-wrap">
+                {MODEL_PRESETS.large.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => set("large_model", m.id)}
+                    className={`text-xs px-2 py-0.5 rounded border ${
+                      form.large_model === m.id
+                        ? "border-teal text-teal"
+                        : "border-border text-textSub hover:text-teal hover:border-teal"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </Field>
           <Field label="Demo Mode 兜底策略">
             <select

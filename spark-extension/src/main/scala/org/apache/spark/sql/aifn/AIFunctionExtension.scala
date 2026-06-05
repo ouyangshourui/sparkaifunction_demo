@@ -1,7 +1,12 @@
 package org.apache.spark.sql.aifn
 
 import org.apache.spark.sql.SparkSessionExtensions
-import org.apache.spark.sql.aifn.optimizer.{AICostModel, MergeAIInvocations, PushDownPredicateThroughAI}
+import org.apache.spark.sql.aifn.optimizer.{
+  AICostModel,
+  MergeAIInvocations,
+  PushDownPredicateThroughAI,
+  PushLimitBeforeAIInference
+}
 import org.apache.spark.sql.aifn.parser.AIFunctionParser
 import org.apache.spark.sql.aifn.registry.AIFunctionRegistry
 import org.apache.spark.sql.aifn.strategy.AIInferenceStrategy
@@ -25,9 +30,17 @@ class AIFunctionExtension extends (SparkSessionExtensions => Unit) {
     ext.injectParser((session, parser) => new AIFunctionParser(session, parser))
 
     // 2) Optimizer Rules
+    //   PushDownPredicateThroughAI : 把 Filter 推到 AIInference 之下（AIInference 节点形态）
+    //   MergeAIInvocations         : 合并同一行内多次 AI 调用
+    //   AICostModel                : 基于代价的路由/批量决策
     ext.injectOptimizerRule(_ => PushDownPredicateThroughAI)
     ext.injectOptimizerRule(_ => MergeAIInvocations)
     ext.injectOptimizerRule(_ => AICostModel)
+
+    // PushLimitBeforeAIInference 放在 PostHoc Resolution（Analyzer 之后、Optimizer 之前）：
+    // 一次性下推 LocalLimit 到含 AI 函数的 Project 之下。后续 Optimizer 阶段
+    // 不会重复触发本规则，但需要规则形态足够"稳"以抵抗 Spark 内置规则的反向提升。
+    ext.injectPostHocResolutionRule(_ => PushLimitBeforeAIInference)
 
     // 3) Strategy
     ext.injectPlannerStrategy(_ => AIInferenceStrategy)
