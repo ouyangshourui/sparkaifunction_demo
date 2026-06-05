@@ -18,9 +18,13 @@ class SqlRequest(BaseModel):
 def execute(req: SqlRequest, request: Request) -> dict[str, Any]:
     spark = request.app.state.spark
     t0 = time.monotonic()
-    # 设置 callSite 属性，让 Spark UI 的 SQL 页面显示 SQL 语句而不是调用栈
-    spark.sparkContext.setLocalProperty("callSite.long", req.sql)
-    spark.sparkContext.setLocalProperty("callSite.short", req.sql[:100])
+    sc = spark.sparkContext
+    # 1) callSite：让 Spark UI 的 SQL 页面显示 SQL 语句而不是调用栈
+    sc.setLocalProperty("callSite.long", req.sql)
+    sc.setLocalProperty("callSite.short", req.sql[:100])
+    # 2) JobDescription：让 Spark UI 的 Jobs 页面 Description 列显示这条 SQL
+    #    （Jobs 页读的是 spark.job.description，独立于 callSite）
+    sc.setJobDescription(req.sql)
     df = spark.sql(req.sql)
     # 强制初始化 QueryExecution，确保 SQL execution 被注册到 Spark UI 监听器
     _ = df._jdf.queryExecution()

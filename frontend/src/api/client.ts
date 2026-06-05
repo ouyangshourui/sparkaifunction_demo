@@ -152,3 +152,24 @@ export const saveCredentials = (p: CredentialsPayload) =>
 
 export const testCredentials = (p: CredentialsPayload) =>
   api.post<TestResponse>("/credentials/test", p).then((r) => r.data);
+
+// —— 架构自描述（技术原理讲解页用）——
+export interface ArchitectureView {
+  spark: { version: string; master: string; app_id: string };
+  extensions: { configured: string; aifn_loaded: boolean; iceberg_loaded: boolean };
+  jar: { path: string | null; loaded: boolean };
+  ai_functions: { name: string; registered: boolean }[];
+  injection_points: {
+    id: string;
+    name: string;
+    method: string;
+    purpose: string;
+    spark_api: string;
+    files: string[];
+  }[];
+  rules: { push_limit_enabled: string };
+  stats: { scala_files: number; scala_loc: number; spark_source_modified: number };
+}
+
+export const getArchitecture = () =>
+  api.get<ArchitectureView>("/architecture").then((r) => r.data);

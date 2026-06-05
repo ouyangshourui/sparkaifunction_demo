@@ -9,6 +9,7 @@ from app.api import functions as functions_api
 from app.api import metrics as metrics_api
 from app.api import recovery as recovery_api
 from app.api import sql as sql_api
+from app.api import architecture as architecture_api
 from app.demo.seed import seed
 from app.spark.session import build_spark
 
@@ -62,6 +63,7 @@ app.include_router(functions_api.router, prefix="/api/functions", tags=["functio
 app.include_router(metrics_api.router, prefix="/api/metrics", tags=["metrics"])
 app.include_router(recovery_api.router, prefix="/api/recovery", tags=["recovery"])
 app.include_router(credentials_api.router, prefix="/api/credentials", tags=["credentials"])
+app.include_router(architecture_api.router, prefix="/api/architecture", tags=["architecture"])
 
 
 @app.get("/api/health")

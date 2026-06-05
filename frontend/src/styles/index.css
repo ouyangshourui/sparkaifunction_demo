@@ -5,5 +5,167 @@
 html, body, #root { height: 100%; }
 body {
   font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  color: #e6edf3;
+  color: #2c2a26;
+  background: #faf8f3;
+  /* 文字渲染微调：浅色底上更柔和 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+/* —— 全局柔化业务代码里写死的 Tailwind 默认色（rose/emerald/violet/rose 系列）——
+ *  业务代码大量使用 text-rose-400 / bg-emerald-500/10 等"鲜艳"色，
+ *  在浅色底上对比度爆炸。这里统一在 utility 之后做"柔和回退"。
+ *  注：用 @layer utilities 比直接覆盖更稳，不会被 Tailwind purge。
+ */
+@layer utilities {
+  /* —— 红/玫红：失败 / Baseline / 警告色 —— */
+  .text-rose-300 { color: #b85450 !important; }
+  .text-rose-400 { color: #a04540 !important; }
+  .text-red-300  { color: #b85450 !important; }
+  .text-red-400  { color: #a04540 !important; }
+  .bg-rose-500\/5  { background-color: rgba(184, 84, 80, 0.05) !important; }
+  .bg-rose-500\/10 { background-color: rgba(184, 84, 80, 0.10) !important; }
+  .bg-rose-500\/20 { background-color: rgba(184, 84, 80, 0.15) !important; }
+  .bg-rose-500\/25 { background-color: rgba(184, 84, 80, 0.20) !important; }
+  .bg-rose-500\/30 { background-color: rgba(184, 84, 80, 0.22) !important; }
+  .bg-red-500\/10  { background-color: rgba(184, 84, 80, 0.08) !important; }
+  .bg-red-500\/20  { background-color: rgba(184, 84, 80, 0.12) !important; }
+  .border-rose-500\/30 { border-color: rgba(184, 84, 80, 0.30) !important; }
+  .border-rose-500\/40 { border-color: rgba(184, 84, 80, 0.35) !important; }
+  .border-rose-500\/50 { border-color: rgba(184, 84, 80, 0.40) !important; }
+  .border-rose-500\/60 { border-color: rgba(184, 84, 80, 0.45) !important; }
+  .border-red-500\/30  { border-color: rgba(184, 84, 80, 0.30) !important; }
+  .border-red-700      { border-color: rgba(184, 84, 80, 0.40) !important; }
+  .bg-rose-500 { background-color: #b85450 !important; }
+  .bg-red-500  { background-color: #b85450 !important; }
+  .bg-red-900\/20 { background-color: rgba(184, 84, 80, 0.10) !important; }
+
+  /* —— 绿色：成功 / 节省 / 优化后 —— */
+  .text-emerald-400 { color: #6b9080 !important; }
+  .bg-emerald-500\/10 { background-color: rgba(107, 144, 128, 0.10) !important; }
+  .bg-emerald-500\/20 { background-color: rgba(107, 144, 128, 0.15) !important; }
+  .bg-emerald-500\/25 { background-color: rgba(107, 144, 128, 0.18) !important; }
+  .border-emerald-500\/30 { border-color: rgba(107, 144, 128, 0.35) !important; }
+  .text-emerald-100 { color: #4f7361 !important; }
+
+  /* —— 紫：PostHoc / Replay / cascade —— */
+  .text-violet-300 { color: #8b6db5 !important; }
+  .text-violet-400 { color: #7a5ba0 !important; }
+  .text-purple-100 { color: #5e457e !important; }
+  .text-purple-400 { color: #7a5ba0 !important; }
+  .bg-violet-500\/5  { background-color: rgba(138, 110, 181, 0.05) !important; }
+  .bg-violet-500\/10 { background-color: rgba(138, 110, 181, 0.10) !important; }
+  .bg-violet-500\/20 { background-color: rgba(138, 110, 181, 0.15) !important; }
+  .bg-violet-500\/25 { background-color: rgba(138, 110, 181, 0.18) !important; }
+  .bg-purple-500\/25 { background-color: rgba(138, 110, 181, 0.18) !important; }
+  .border-violet-500\/30 { border-color: rgba(138, 110, 181, 0.35) !important; }
+  .border-violet-500\/40 { border-color: rgba(138, 110, 181, 0.40) !important; }
+  .border-violet-500\/50 { border-color: rgba(138, 110, 181, 0.45) !important; }
+  .border-violet-500\/60 { border-color: rgba(138, 110, 181, 0.50) !important; }
+  .bg-violet-500 { background-color: #8b6db5 !important; }
+  .bg-violet-600 { background-color: #7a5ba0 !important; }
+  .hover\:bg-violet-500:hover { background-color: #8b6db5 !important; }
+  .bg-purple-500 { background-color: #8b6db5 !important; }
+
+  /* —— 琥珀（amber-500 系列：警告 / A/B 对比） —— */
+  .text-amber-400 { color: #c08552 !important; }
+  .bg-amber-500   { background-color: #c08552 !important; }
+  .hover\:bg-amber-400:hover { background-color: #d49568 !important; }
+  .bg-amber-500\/5  { background-color: rgba(192, 133, 82, 0.05) !important; }
+  .bg-amber-500\/10 { background-color: rgba(192, 133, 82, 0.10) !important; }
+  .border-amber-500\/30 { border-color: rgba(192, 133, 82, 0.35) !important; }
+  .border-amber-500\/40 { border-color: rgba(192, 133, 82, 0.40) !important; }
+  .shadow-amber-500\/20 { --tw-shadow-color: rgba(192, 133, 82, 0.20); }
+
+  /* —— 蓝/天蓝（用于 token 高亮 & PlanTree AI 节点） —— */
+  .text-sky-100 { color: #2c5275 !important; }
+  .text-sky-200 { color: #3a6590 !important; }
+  .text-sky-300 { color: #4a7aaa !important; }
+  .text-sky-300\/90 { color: rgba(74, 122, 170, 0.9) !important; }
+  .bg-sky-500\/15 { background-color: rgba(110, 146, 180, 0.10) !important; }
+  .bg-sky-500\/20 { background-color: rgba(110, 146, 180, 0.15) !important; }
+  .bg-sky-500\/25 { background-color: rgba(110, 146, 180, 0.18) !important; }
+  .bg-sky-500\/30 { background-color: rgba(110, 146, 180, 0.20) !important; }
+  .border-sky-400\/40 { border-color: rgba(110, 146, 180, 0.40) !important; }
+  .border-sky-400\/60 { border-color: rgba(110, 146, 180, 0.55) !important; }
+  .bg-blue-500   { background-color: #6e92b4 !important; }
+
+  /* —— PlanTree 紫色系（scan 节点） —— */
+  .text-purple-200 { color: #6b4f8a !important; }
+  .text-purple-300 { color: #7a5ba0 !important; }
+  .bg-purple-500\/15 { background-color: rgba(138, 110, 181, 0.10) !important; }
+  .bg-purple-500\/20 { background-color: rgba(138, 110, 181, 0.15) !important; }
+  .border-purple-400\/40 { border-color: rgba(138, 110, 181, 0.40) !important; }
+  .border-purple-400\/60 { border-color: rgba(138, 110, 181, 0.55) !important; }
+
+  /* —— PlanTree filter 节点（amber-300/200） —— */
+  .text-amber-200 { color: #a87042 !important; }
+  .text-amber-200\/90 { color: rgba(168, 112, 66, 0.9) !important; }
+  .text-amber-300 { color: #b87a48 !important; }
+  .bg-amber-500\/15 { background-color: rgba(192, 133, 82, 0.10) !important; }
+  .bg-amber-500\/20 { background-color: rgba(192, 133, 82, 0.15) !important; }
+  .border-amber-400\/40 { border-color: rgba(192, 133, 82, 0.40) !important; }
+  .border-amber-400\/60 { border-color: rgba(192, 133, 82, 0.55) !important; }
+
+  /* —— PlanTree project 节点（emerald-200/300） —— */
+  .text-emerald-200 { color: #5d7d6e !important; }
+  .text-emerald-300 { color: #6b9080 !important; }
+  .text-emerald-300\/80 { color: rgba(107, 144, 128, 0.85) !important; }
+  .border-emerald-400\/40 { border-color: rgba(107, 144, 128, 0.40) !important; }
+  .border-emerald-400\/60 { border-color: rgba(107, 144, 128, 0.55) !important; }
+
+  /* —— PlanTree limit 节点（rose-200/300） —— */
+  .text-rose-200 { color: #9a4a45 !important; }
+  .border-rose-400\/40 { border-color: rgba(184, 84, 80, 0.40) !important; }
+
+  /* —— PlanTree shuffle 节点（indigo） —— */
+  .text-indigo-200 { color: #5a5485 !important; }
+  .text-indigo-300 { color: #6b6595 !important; }
+  .bg-indigo-500\/10 { background-color: rgba(107, 101, 149, 0.10) !important; }
+  .bg-indigo-500\/20 { background-color: rgba(107, 101, 149, 0.15) !important; }
+  .border-indigo-400\/40 { border-color: rgba(107, 101, 149, 0.40) !important; }
+
+  /* —— PlanTree other 节点（neutral） —— */
+  .text-neutral-200 { color: #5e5b55 !important; }
+  .text-neutral-300 { color: #75716a !important; }
+  .bg-neutral-500\/10 { background-color: rgba(117, 113, 106, 0.08) !important; }
+  .bg-neutral-600\/40 { background-color: rgba(94, 91, 85, 0.20) !important; }
+  .border-neutral-500\/40 { border-color: rgba(117, 113, 106, 0.35) !important; }
+
+  /* —— PlanTree cyan（runtime filters） —— */
+  .text-cyan-100 { color: #2e6068 !important; }
+  .text-cyan-300 { color: #4a8590 !important; }
+  .text-cyan-300\/80 { color: rgba(74, 133, 144, 0.85) !important; }
+  .bg-cyan-500\/25 { background-color: rgba(74, 133, 144, 0.18) !important; }
+  .border-cyan-400\/40 { border-color: rgba(74, 133, 144, 0.40) !important; }
+
+  /* —— 橘色：警告超额 —— */
+  .text-orange-400 { color: #c08552 !important; }
+  .border-orange-500\/30 { border-color: rgba(192, 133, 82, 0.35) !important; }
+  .bg-orange-500\/10 { background-color: rgba(192, 133, 82, 0.10) !important; }
+
+  /* —— 阴影柔化（去掉浅色底上的硬黑阴影）—— */
+  .shadow-lg { box-shadow: 0 4px 16px -4px rgba(44, 42, 38, 0.08), 0 2px 4px -2px rgba(44, 42, 38, 0.04) !important; }
+  .shadow-teal\/20 { --tw-shadow-color: rgba(107, 144, 128, 0.20); }
+  .shadow-violet-600\/20 { --tw-shadow-color: rgba(122, 91, 160, 0.20); }
+}
+
+/* —— 滚动条柔化（浅色主题下默认黑色滚动条很突兀） —— */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #f0ece3; }
+::-webkit-scrollbar-thumb {
+  background: #d4cdb8;
+  border-radius: 5px;
+  border: 2px solid #f0ece3;
+}
+::-webkit-scrollbar-thumb:hover { background: #b5ad95; }
+
+/* —— 选区柔化 —— */
+::selection { background: rgba(107, 144, 128, 0.25); color: #2c2a26; }
+
+/* —— Monaco 编辑器在浅色主题下覆盖（避免依然黑底白字突兀） ——
+ *  用 attribute selector，让 SqlEditor 用浅色风。
+ *  注：如果 SqlEditor 写死了 vs-dark theme，仍会黑底；这要在组件里改 theme 才彻底。
+ *  这里只做一层 fallback：让 .monaco-editor 容器外圈不要刺眼。
+ */
+.monaco-editor { border-radius: 6px; }

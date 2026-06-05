@@ -11,9 +11,14 @@ import org.apache.spark.sql.catalyst.plans.logical.{
 }
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.aifn.expressions.{AIClassify, AIComplete, AIExtract}
+import org.apache.spark.sql.internal.SQLConf
 
 /**
  * PushLimitBeforeAIInference：把 Limit N **搬移**到含 AI 函数的 Project 之下。
+ *
+ * == 运行时开关 ==
+ *  通过 SQLConf `spark.aifn.pushLimit.enabled` 控制（默认 true）。
+ *  设为 false 时规则直接 return plan，用于 Demo「关闭 vs 开启」对照演示。
  *
  * == 支持的模式 ==
  *  模式 A（原行为）：LocalLimit(n, Project(ai, child))
@@ -40,7 +45,17 @@ import org.apache.spark.sql.aifn.expressions.{AIClassify, AIComplete, AIExtract}
  */
 object PushLimitBeforeAIInference extends Rule[LogicalPlan] with Logging {
 
+  /** SQLConf key：运行时开关，false 时规则跳过（用于 demo 对照演示）。 */
+  val ENABLED_KEY = "spark.aifn.pushLimit.enabled"
+
   override def apply(plan: LogicalPlan): LogicalPlan = {
+    // 运行时开关：默认 true。读 SQLConf，给 demo 演示「关闭 vs 开启」对照用
+    val enabled = SQLConf.get.getConfString(ENABLED_KEY, "true").toBoolean
+    if (!enabled) {
+      logWarning(s"[AIFN] PushLimitBeforeAIInference disabled by $ENABLED_KEY=false")
+      return plan
+    }
+
     val out = plan.transformUp {
       // 模式 1/2/3：LocalLimit(n, ...) 其中 ... 的子树含 Project(ai)
       case l @ LocalLimit(n, topNode) =>

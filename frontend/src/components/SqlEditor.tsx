@@ -11,7 +11,7 @@ export default function SqlEditor({
     <Editor
       height="100%"
       defaultLanguage="sql"
-      theme="vs-dark"
+      theme="vs"
       value={value}
       onChange={(v) => onChange(v ?? "")}
       options={{
