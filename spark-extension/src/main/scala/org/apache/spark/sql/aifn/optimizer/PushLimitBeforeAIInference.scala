@@ -3,6 +3,7 @@ package org.apache.spark.sql.aifn.optimizer
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.plans.logical.{
+  Filter,
   GlobalLimit,
   LocalLimit,
   LogicalPlan,
@@ -14,32 +15,15 @@ import org.apache.spark.sql.aifn.expressions.{AIClassify, AIComplete, AIExtract}
 /**
  * PushLimitBeforeAIInference：把 Limit N **搬移**到含 AI 函数的 Project 之下。
  *
- * 现象（未应用本规则）：
- * {{{
- *   GlobalLimit 10
- *   +- LocalLimit 10
- *      +- Project [id, text, ai_classify(text, ...) AS tag]   ← AI 在每行都跑
- *         +- Filter (country='US' AND sales>1000)
- *            +- BatchScan reviews
- * }}}
- * 当 Filter 命中 N 行时：ai_classify 调用 N 次 → 然后才取前 10 行返回。
- *
- * 应用本规则后：
- * {{{
- *   GlobalLimit 10
- *   +- Project [id, text, ai_classify(text, ...) AS tag]
- *      +- LocalLimit 10                                        ← 本规则搬移而来
- *         +- Filter (country='US' AND sales>1000)
- *            +- BatchScan reviews
- * }}}
- * 此时：Filter 命中 N 行 → LocalLimit 取 10 → Project 只对 10 行跑 ai_classify
- * → GlobalLimit 10 兜底。AI 调用从 N 次降到 ≤10 次。
- *
- * == 为什么是搬移而不是复制 ==
- *   Project 是 row-preserving（每行 1:1 输出），LocalLimit(N, Project(child))
- *   与 Project(LocalLimit(N, child)) 行数完全相等。
- *   早期版本使用"复制 LocalLimit"会被 Catalyst 后续规则（CombineLimits / 重写）
- *   把内层吃掉，导致最终 plan 看不到下推效果。直接搬移更稳定。
+ * == 支持的模式 ==
+ *  模式 A（原行为）：LocalLimit(n, Project(ai, child))
+ *    → Project(ai, LocalLimit(n, child))
+ *  模式 B（新增）：LocalLimit(n, Filter(cond, Project(ai, child)))
+ *    → Project(ai, LocalLimit(n, Filter(cond, child)))
+ *  模式 C（新增·通用）：LocalLimit(n, topNode) 其中 topNode 的子树含 Project(ai)
+ *    → Project(ai, LocalLimit(n, topNodeWithoutProject))
+ *    前提：Project(ai) 与 Limit 之间必须是线性链（Filter/SubqueryAlias 等单子节点），
+ *    不能穿越 Union/Join 等多子节点算子。
  *
  * == 为什么 Catalyst 不自动做？==
  *   - `LimitPushDown` 默认只穿越 Join/Union/Aggregate(group-only)，不穿越 Project
@@ -51,29 +35,101 @@ import org.apache.spark.sql.aifn.expressions.{AIClassify, AIComplete, AIExtract}
  *   - Project 中含至少一个 AI 函数（AIClassify / AIComplete / AIExtract）
  *   - 其它表达式 deterministic（含 rand() 之类的就不推）
  *   - AI 函数自身视作 row-deterministic（StateTable prompt_hash 锁定输入↔输出）
+ *   - Limit 与 Project(ai) 之间只有单子节点算子（Filter/SubqueryAlias 等），
+ *     不穿越 Union/Join（多子节点会改变推送语义）
  */
 object PushLimitBeforeAIInference extends Rule[LogicalPlan] with Logging {
 
   override def apply(plan: LogicalPlan): LogicalPlan = {
-    val out = plan transformDown {
+    val out = plan.transformUp {
+      // 模式 1/2/3：LocalLimit(n, ...) 其中 ... 的子树含 Project(ai)
+      case l @ LocalLimit(n, topNode) =>
+        tryPushLocalLimitBelowAI(l, n, topNode).getOrElse(l)
 
-      // 模式 1：LocalLimit 直接位于 Project 之上
-      //   LocalLimit(n, Project(ai, child)) → Project(ai, LocalLimit(n, child))
-      case LocalLimit(n, Project(projList, child))
-          if shouldPush(projList, child) =>
-        logWarning(s"[AIFN] push LocalLimit($n) below AI Project")
-        Project(projList, LocalLimit(n, child))
-
-      // 模式 2：GlobalLimit 直接位于 Project 之上（少见）
-      case GlobalLimit(n, Project(projList, child))
-          if shouldPush(projList, child) =>
-        logWarning(s"[AIFN] push GlobalLimit($n) (as LocalLimit) below AI Project")
-        GlobalLimit(n, Project(projList, LocalLimit(n, child)))
+      // 模式 4/5：GlobalLimit(n, ...) 其中 ... 的子树含 Project(ai)
+      case g @ GlobalLimit(n, topNode) =>
+        tryPushGlobalLimitBelowAI(g, n, topNode).getOrElse(g)
     }
     if (!out.fastEquals(plan)) {
       logWarning(s"[AIFN] PushLimitBeforeAIInference changed plan:\nBEFORE:\n$plan\nAFTER:\n$out")
     }
     out
+  }
+
+  /** 尝试把 LocalLimit(n) 推到 topNode 子树中首个含 AI 的 Project 之下。*/
+  private def tryPushLocalLimitBelowAI(
+      original: LocalLimit,
+      n: Expression,
+      topNode: LogicalPlan): Option[LogicalPlan] = {
+
+    // 找 topNode 子树中最顶层的含 AI Project（pre-order 首个匹配）
+    val aiProjectOpt = topNode.collectFirst {
+      case p: Project if p.projectList.exists(containsAIExpression) => p
+    }
+    aiProjectOpt.flatMap { aiProject =>
+      if (!shouldPush(aiProject.projectList, aiProject.child)) {
+        None
+      } else if (!isLinearChain(topNode, aiProject)) {
+        // Limit 与 Project(ai) 之间有 Union/Join 等多子节点算子，不推送（语义可能变化）
+        None
+      } else {
+        // 在 topNode 中将 aiProject 替换为其 child，得到 topNodeWithoutProject
+        val topNodeWithoutProject = replaceNode(topNode, aiProject, aiProject.child)
+        Some(aiProject.copy(child = LocalLimit(n, topNodeWithoutProject)))
+      }
+    }
+  }
+
+  /** 尝试把 GlobalLimit(n) 推到 topNode 子树中首个含 AI 的 Project 之下。*/
+  private def tryPushGlobalLimitBelowAI(
+      original: GlobalLimit,
+      n: Expression,
+      topNode: LogicalPlan): Option[LogicalPlan] = {
+
+    val aiProjectOpt = topNode.collectFirst {
+      case p: Project if p.projectList.exists(containsAIExpression) => p
+    }
+    aiProjectOpt.flatMap { aiProject =>
+      if (!shouldPush(aiProject.projectList, aiProject.child)) {
+        None
+      } else if (!isLinearChain(topNode, aiProject)) {
+        None
+      } else {
+        val topNodeWithoutProject = replaceNode(topNode, aiProject, aiProject.child)
+        Some(GlobalLimit(n, aiProject.copy(child = LocalLimit(n, topNodeWithoutProject))))
+      }
+    }
+  }
+
+  /**
+   * 在 tree 中找到 target 节点，用 replacement 替换它。
+   * 使用 eq 比较（引用相等），只替换第一个匹配（target 在 tree 中只出现一次）。
+   */
+  private def replaceNode(tree: LogicalPlan, target: LogicalPlan, replacement: LogicalPlan): LogicalPlan = {
+    if (tree.eq(target)) replacement
+    else {
+      tree.mapChildren { child =>
+        replaceNode(child, target, replacement)
+      }
+    }
+  }
+
+  /**
+   * 检查 from 到 to 之间是否是「线性链」：
+   *   - from 自身或 from 的某个后代是 to
+   *   - 从 from 到 to 的路径上所有中间节点都是单子节点（Filter/SubqueryAlias 等）
+   *   - 不穿越 Union/Join（多子节点会改变推送语义）
+   *
+   * 只检查从左子树（children.head）向下走的路径。
+   * 如果 to 不在左子树上，保守返回 false（不推送）。
+   */
+  private def isLinearChain(from: LogicalPlan, to: LogicalPlan): Boolean = {
+    var node: LogicalPlan = from
+    while (!node.eq(to)) {
+      if (node.children.size != 1) return false
+      node = node.children.head
+    }
+    true
   }
 
   /** 是否值得且安全地把 Limit 推到 Project 之下。 */
