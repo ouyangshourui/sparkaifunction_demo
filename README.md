@@ -3,6 +3,52 @@
 > 把大模型作为 Spark Catalyst 的一等算子，让数据团队用 SQL 一行调用 AI，
 > 享受谓词下推、批量合并、智能路由、状态恢复等数据库级优化。
 
+---
+
+## 0. 项目挑战与收益（TL;DR）
+
+### 0.1 我们解决的核心挑战
+
+| # | 挑战 | 现状（不用本方案）| 痛点 |
+| --- | --- | --- | --- |
+| **C1** | **LLM 调用成为 SQL 黑盒** | 用 `pandas_udf` 包装 OpenAI 调用 | Catalyst 把 UDF 当 black-box，谓词无法下推、Limit 无法穿透、cache 不识别 |
+| **C2** | **任务挂掉重跑要再付一遍钱** | Airflow 重试 = 重新调一遍 LLM | 调用费 / token 配额双重浪费，凌晨任务挂掉损失放大 60×（按一天 1 次重跑/2 月） |
+| **C3** | **小模型 vs 大模型手工切换** | 业务硬编码 `if confidence < 0.85: call_large()` | 路由逻辑散落在 SQL 之外，难统一治理 |
+| **C4** | **可观测性缺失** | UDF 调用埋点要靠 logger / accumulator | 看不到 token / 路由 / 延迟分布，预算告警靠经验 |
+| **C5** | **接入成本高** | 闭源方案要 fork Spark 或上专有引擎（Databricks Photon / Snowflake AI_*）| 云厂商绑定 + 升级困难 |
+
+### 0.2 本项目交付的收益
+
+| # | 收益 | 实证（来自本项目运行时数据）| 对应代码 / 页面 |
+| --- | --- | --- | --- |
+| **B1** | **零 Spark 源码侵入** | 0 行 Spark 改动；项目独立 1736 行 Scala（5 个 SparkSessionExtensions 标准注入点）| `AIFunctionExtension.scala` · `/architecture` 页 KPI |
+| **B2** | **Plan 形态自动改写**：用户写最自然的 SQL，规则替他下推 | EXPLAIN 实测：`LocalLimit` 自动从 AI 之上搬到 AI 之下；运行时 SQLConf `spark.aifn.pushLimit.enabled` 可一键开关 | `PushLimitBeforeAIInference.scala` · TryIt **Act 1/2** |
+| **B3** | **行级 + 重启级幂等**：重跑 N 行 = 0 次新调用 | `prompt_hash` 锁定输入↔输出 + Iceberg 持久化；模拟「任务挂掉 → 进程重启 → load cache」后重跑零成本 | `runtime/StateTable.scala` · TryIt **Act 3** |
+| **B4** | **可被 Catalyst 全套规则识别** | AIInference 是一等 LogicalPlan，EXPLAIN 显式可见；3 条扩展 Optimizer 规则 + 1 条 PostHoc 规则 + 1 个 Strategy | `logical/AIInference.scala` · `/workspace` EXPLAIN 抽屉 |
+| **B5** | **OpenAI 兼容协议**：一份代码同时跑混元 / TokenHub / DeepSeek / OpenAI | 凭证只需 `api_key + base_url`；3 个内置 AI 函数（`ai_classify` / `ai_complete` / `ai_extract`）+ DDL 自定义 | `runtime/HunyuanClient.scala` · `/settings` 页 |
+| **B6** | **治理面板开箱即用** | per-model token / 调用次数 / 路由分布 / 平均延迟；按 token 单价折算花费（CNY）| `runtime/Governance.scala` · `/insights` 页 KPI Hero |
+| **B7** | **一键卸载** | 去掉 `--conf spark.sql.extensions=...` 即恢复原生 Spark；不需要重装、重打 jar | `/architecture` 页对比表 |
+
+### 0.3 一分钟说清楚
+
+```
+用户写最自然的 SQL ─────► Catalyst 标准扩展点（5 个）─────► AI 算子 + 数据库级优化
+   SELECT ai_classify(text, ...) FROM reviews LIMIT 3
+                              │
+                              ▼
+   ✓ Plan 自动改写：LocalLimit 搬到 AI 之下     ← PushLimitBeforeAIInference
+   ✓ 谓词下推到扫描层                            ← PushDownPredicateThroughAI
+   ✓ 行级幂等，prompt_hash 去重                  ← StateTable + Iceberg
+   ✓ 智能路由：小模型一击命中 / 升级大模型       ← ModelRouter
+   ✓ 治理面板实时看 token / ¥ / 延迟              ← Governance
+```
+
+> 📌 下方 §1-§8 为最初 v1 PRD（5 Tab 命名 Workbench/Functions/Monitor/Recovery/Settings）。
+> 当前 SPA 已重构为 4 主 Tab：**Try It · Workspace · Insights · Architecture** + 齿轮 Settings；
+> 实际页面结构见 `frontend/src/App.tsx` 或访问 http://127.0.0.1:5193。
+
+---
+
 * **默认大模型**：`hy3-preview`（UI 展示名 **Hy3 Preview**）
 * **默认小模型**：`hy-mt2-pro`（UI 展示名 **Hy-MT2-Pro**）
 * **默认网关**：腾讯云 TokenHub `https://tokenhub.tencentmaas.com/v1`，OpenAI 兼容协议（`Authorization: Bearer ${api_key}`）
