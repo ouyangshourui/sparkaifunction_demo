@@ -18,8 +18,14 @@ class SqlRequest(BaseModel):
 def execute(req: SqlRequest, request: Request) -> dict[str, Any]:
     spark = request.app.state.spark
     t0 = time.monotonic()
+    # 设置 callSite 属性，让 Spark UI 的 SQL 页面显示 SQL 语句而不是调用栈
+    spark.sparkContext.setLocalProperty("callSite.long", req.sql)
+    spark.sparkContext.setLocalProperty("callSite.short", req.sql[:100])
     df = spark.sql(req.sql)
-    rows = df.limit(req.limit).toPandas().to_dict(orient="records")
+    # 强制初始化 QueryExecution，确保 SQL execution 被注册到 Spark UI 监听器
+    _ = df._jdf.queryExecution()
+    rows_list = df.limit(req.limit).collect()
+    rows = [r.asDict() for r in rows_list]
     elapsed = int((time.monotonic() - t0) * 1000)
     schema = [{"name": f.name, "type": f.dataType.simpleString()} for f in df.schema.fields]
     return {"rows": rows, "schema": schema, "elapsed_ms": elapsed, "row_count": len(rows)}

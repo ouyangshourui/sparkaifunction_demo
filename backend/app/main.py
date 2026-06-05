@@ -20,6 +20,15 @@ _spark = None
 async def lifespan(app: FastAPI):
     global _spark
     _spark = build_spark()
+    # 记录 Spark UI URL（供前端导航栏链接使用）
+    try:
+        raw_url = _spark.sparkContext.uiWebUrl
+        # 替换 host 为 127.0.0.1，确保浏览器能访问
+        from urllib.parse import urlparse
+        parsed = urlparse(raw_url)
+        app.state.spark_ui_url = f"http://127.0.0.1:{parsed.port}"
+    except Exception:
+        app.state.spark_ui_url = "http://127.0.0.1:4040"  # fallback
     # 数据预热（Iceberg 默认 catalog=local）
     try:
         existing = [
@@ -58,3 +67,8 @@ app.include_router(credentials_api.router, prefix="/api/credentials", tags=["cre
 @app.get("/api/health")
 def health():
     return {"status": "ok", "spark_version": app.state.spark.version}
+
+
+@app.get("/api/spark-ui-url")
+def spark_ui_url():
+    return {"url": app.state.spark_ui_url}
