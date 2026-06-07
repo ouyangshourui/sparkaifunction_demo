@@ -186,7 +186,7 @@ function Act1() {
               点左侧按钮，看 Plan 里 LocalLimit 自动跑到 ai_classify 之下
             </div>
           )}
-          {err && <div className="text-red-300 text-xs font-mono whitespace-pre-wrap">{err}</div>}
+          {err && <ErrBlock err={err} />}
           {r && (
             <div className="space-y-2">
               <div className="text-xs text-textSub flex items-center gap-2">
@@ -723,6 +723,44 @@ function SqlBox({ sql }: { sql: string }) {
   return (
     <div className="bg-bgDark border border-border rounded p-3">
       <pre className="text-xs font-mono text-textMain whitespace-pre-wrap leading-relaxed">{sql}</pre>
+    </div>
+  );
+}
+
+// 错误展示：识别 429 / 鉴权 / 普通三类，分别给不同颜色 + 行动建议
+function ErrBlock({ err }: { err: string }) {
+  const low = err.toLowerCase();
+  const isRateLimit =
+    low.includes("429") || low.includes("rate limit") || low.includes("rpm") || low.includes("tpm") || low.includes("限频");
+  const isAuth = low.includes("401") || low.includes("invalid api key") || low.includes("apikey") || low.includes("鉴权");
+
+  if (isRateLimit) {
+    return (
+      <div className="bg-amber/10 border border-amber/40 rounded p-3 text-xs space-y-1.5">
+        <div className="flex items-center gap-1.5 text-amber font-semibold">
+          ⏱ 网关限频（RPM/TPM 超额）
+        </div>
+        <div className="text-textSub leading-relaxed font-mono whitespace-pre-wrap">{err}</div>
+        <div className="text-textSub leading-relaxed border-l-2 border-amber pl-2 mt-1">
+          💡 已自动退避重试 200/600/1500ms 共 3 次仍失败。等 30-60 秒再点，或去 Settings 把 Demo Mode 切到 <code className="text-amber px-1">auto</code> 让失败自动降级 mock。
+        </div>
+      </div>
+    );
+  }
+  if (isAuth) {
+    return (
+      <div className="bg-amber/10 border border-amber/40 rounded p-3 text-xs space-y-1.5">
+        <div className="flex items-center gap-1.5 text-amber font-semibold">🔑 鉴权失败</div>
+        <div className="text-textSub leading-relaxed font-mono whitespace-pre-wrap">{err}</div>
+        <div className="text-textSub leading-relaxed border-l-2 border-amber pl-2 mt-1">
+          💡 去 <Link to="/settings" className="text-teal underline">Settings</Link> 用「测试连接」重测 Key，错误诊断会列出可执行排查项。
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="bg-rose-500/10 border border-rose-400/30 rounded p-3 text-xs">
+      <pre className="text-rose-300 font-mono whitespace-pre-wrap leading-relaxed">{err}</pre>
     </div>
   );
 }

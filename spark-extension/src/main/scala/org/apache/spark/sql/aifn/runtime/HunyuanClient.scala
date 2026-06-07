@@ -176,14 +176,49 @@ class HunyuanClient(apiKey: String, baseUrl: String) {
       } finally resp.close()
     }
 
+    // —— 429 / 5xx 自动退避重试 ——
+    // 腾讯云 TokenHub 有 RPM 维度限频（如 60 req/min），demo 期高频点击或 100 行批跑容易触发。
+    // 退避序列 200ms → 600ms → 1500ms 共 3 次，命中即返回；3 次后仍 429/5xx 走原 fallback / 抛错路径。
+    // 4xx（除 429）不重试：那是请求本身的错（apikey 无效 / 模型不存在），重试也救不了。
+    val isRetryable: Throwable => Boolean = {
+      case e: RuntimeException =>
+        val msg = Option(e.getMessage).getOrElse("")
+        msg.contains("OpenAI-compat 429") ||
+          msg.contains("OpenAI-compat 5") || // 500/502/503/504
+          msg.contains("rate limit") ||
+          msg.contains("rpm") ||
+          msg.contains("tpm")
+      case _ => false
+    }
+    val callWithRetry: () => Result = () => {
+      val backoffMs = Array(200L, 600L, 1500L)
+      var lastErr: Throwable = null
+      var i = 0
+      var done: Result = null
+      while (done == null && i <= backoffMs.length) {
+        try {
+          done = realCall()
+        } catch {
+          case e: Throwable if isRetryable(e) && i < backoffMs.length =>
+            lastErr = e
+            try Thread.sleep(backoffMs(i)) catch { case _: InterruptedException => }
+            i += 1
+          case e: Throwable =>
+            // 不可重试 / 已重试到底 —— 抛出去让外层 fallback 或 demo_mode=false 捕获
+            throw e
+        }
+      }
+      if (done == null) throw lastErr else done
+    }
+
     if (demoMode == "false") {
-      val r = realCall()
+      val r = callWithRetry()
       recordToGovernance(r.model, r.promptTokens, r.completionTokens, r.latencyMs, "small_only")
       return r
     }
 
     try {
-      val r = realCall()
+      val r = callWithRetry()
       recordToGovernance(r.model, r.promptTokens, r.completionTokens, r.latencyMs, "small_only")
       r
     } catch {

@@ -32,20 +32,64 @@ def execute(req: SqlRequest, request: Request) -> dict[str, Any]:
     if not statements:
         return {"rows": [], "schema": [], "elapsed_ms": 0, "row_count": 0}
 
-    df = None
-    for stmt in statements[:-1]:
-        # 中间语句：执行但不取结果（如 CREATE / SET / INSERT）
-        spark.sql(stmt)
-    # 最后一条：取结果
-    last = statements[-1]
-    df = spark.sql(last)
-    # 强制初始化 QueryExecution，确保 SQL execution 被注册到 Spark UI 监听器
-    _ = df._jdf.queryExecution()
-    rows_list = df.limit(req.limit).collect()
-    rows = [r.asDict() for r in rows_list]
-    elapsed = int((time.monotonic() - t0) * 1000)
-    schema = [{"name": f.name, "type": f.dataType.simpleString()} for f in df.schema.fields]
-    return {"rows": rows, "schema": schema, "elapsed_ms": elapsed, "row_count": len(rows)}
+    try:
+        df = None
+        for stmt in statements[:-1]:
+            # 中间语句：执行但不取结果（如 CREATE / SET / INSERT）
+            spark.sql(stmt)
+        # 最后一条：取结果
+        last = statements[-1]
+        df = spark.sql(last)
+        # 强制初始化 QueryExecution，确保 SQL execution 被注册到 Spark UI 监听器
+        _ = df._jdf.queryExecution()
+        rows_list = df.limit(req.limit).collect()
+        rows = [r.asDict() for r in rows_list]
+        elapsed = int((time.monotonic() - t0) * 1000)
+        schema = [{"name": f.name, "type": f.dataType.simpleString()} for f in df.schema.fields]
+        return {"rows": rows, "schema": schema, "elapsed_ms": elapsed, "row_count": len(rows)}
+    except Exception as e:  # noqa: BLE001
+        raise _translate_exec_error(e)
+
+
+def _translate_exec_error(e: Exception):
+    """把 py4j 抛上来的 JVM 异常翻译成前端可读的 HTTPException。
+
+    最常见三类：
+    1) 限频   → 429 + 友好建议（demo 期高频点击触发的假错误）
+    2) 鉴权   → 401 + 指向 Settings 重测
+    3) 其它   → 500 透传（保持调试信息）
+    """
+    from fastapi import HTTPException
+
+    msg = str(e)
+    low = msg.lower()
+    # 腾讯云 TokenHub: "OpenAI-compat 429: ... rate limit exceeded on dimension: rpm ..."
+    if "429" in msg or "rate limit" in low or "rpm" in low or "tpm" in low:
+        # 提取 request_id 给用户提工单用
+        req_id = None
+        try:
+            import re
+            m = re.search(r'"request_id"\s*:\s*"([^"]+)"', msg)
+            if m:
+                req_id = m.group(1)
+        except Exception:  # noqa: BLE001
+            pass
+        suffix = f"（RequestId: {req_id}）" if req_id else ""
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "腾讯云网关限频（RPM/TPM 超额）。HunyuanClient 已在执行端做了 200/600/1500ms "
+                "三次退避重试，仍未通过。" + suffix +
+                "请等 30-60 秒再试，或在 Settings 把 Demo Mode 暂时切到 'auto' 让失败自动降级 mock。"
+            ),
+        )
+    if "401" in msg or "invalid api key" in low or "unauthorized" in low:
+        raise HTTPException(
+            status_code=401,
+            detail="ApiKey 鉴权失败：请到 Settings 页用「测试连接」重新验 Key（详见错误诊断）。",
+        )
+    # 其它：原文透传，方便排查
+    raise HTTPException(status_code=500, detail=msg[:1500])
 
 
 def _split_statements(sql: str) -> list[str]:
