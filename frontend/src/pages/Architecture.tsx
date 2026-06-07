@@ -47,6 +47,7 @@ export default function Architecture() {
         <SectionRuntime arch={arch} />
         <SectionInjectionPoints arch={arch} />
         <SectionDataflow />
+        <SectionComponents />
         <SectionNonInvasive arch={arch} />
         <CTA />
       </div>
@@ -430,9 +431,6 @@ function SectionDataflow() {
   );
 }
 
-// ============================================================
-// ⑤ 「零侵入」凭证三连
-// ============================================================
 function SectionNonInvasive({ arch }: { arch: ArchitectureView }) {
   return (
     <Section
@@ -598,6 +596,174 @@ function CTA() {
         >
           ⌨ 去 Workspace 自己写 SQL
         </Link>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ④ 三个核心 Runtime 组件深度（DynamicBatcher / StateTable / ModelRouter）
+//    README §3.6 的镜像简版：每组件 4 段（痛点 / 原理 / 实测 / 局限）
+//    实测数字来自 commit 13760fe 后采集的 100 行 ai_classify
+// ============================================================
+function SectionComponents() {
+  return (
+    <Section
+      no="④"
+      title="三个核心 Runtime 组件深度（实测数据）"
+      subtitle="AIInferenceExec 内部协同的三个 JVM Singleton：攒批 / 行级幂等 / 智能路由"
+      tone="amber"
+    >
+      <div className="space-y-3">
+        {COMPONENTS.map((c) => (
+          <ComponentCard key={c.id} c={c} />
+        ))}
+      </div>
+      <div className="mt-3 text-textSub text-[11px] leading-relaxed italic">
+        💡 详细 5 段分析（含与业界对比 Snowflake / BigQuery / Databricks）见 README §3.6
+      </div>
+    </Section>
+  );
+}
+
+interface ComponentSpec {
+  id: string;
+  name: string;
+  subtitle: string;
+  tone: "amber" | "teal" | "violet";
+  pain: string;
+  principle: { line: string; code?: string }[];
+  measured: { label: string; value: string; tone?: "ok" | "warn" }[];
+  caveat: string;
+  source: string;
+}
+
+const COMPONENTS: ComponentSpec[] = [
+  {
+    id: "batcher",
+    name: "DynamicBatcher",
+    subtitle: "三维触发的 partition 内攒批",
+    tone: "amber",
+    pain: "一行一次 HTTP（100 行 = 100 RTT）；固定批 size 撞 token 上限被网关 413 退回。",
+    principle: [
+      { line: "三维 OR 触发 flush", code: "size>=16 || tokens>=8000 || waitMs>=200" },
+      { line: "token 估算（启发式）", code: "max(1, prompt.length / 3)" },
+      { line: "调用栈", code: "AIInferenceExec.mapPartitions → batcher.runBatch → router.routeBatch" },
+    ],
+    measured: [
+      { label: "demo 模式（mock latency 5ms）", value: "~1046 ms / 100 行", tone: "ok" },
+      { label: "生产估算（真实 RTT 300ms）", value: "~3.5s（vs 不攒批 30s）", tone: "ok" },
+      { label: "加速倍数（生产估算）", value: "~9×", tone: "ok" },
+    ],
+    caveat: "demo 是 partition 内同步，maxWaitMs 退化为「最多扫一次完成」；token 估算粗糙（生产建议接 tiktoken）；无 backpressure（不感知下游 429）。",
+    source: "runtime/DynamicBatcher.scala · 54 行",
+  },
+  {
+    id: "state",
+    name: "StateTable",
+    subtitle: "双层缓存 + 行级幂等",
+    tone: "teal",
+    pain: "任务重跑 = 重新付费；进程重启 = cache 全丢；分布式写 Iceberg 冲突。",
+    principle: [
+      { line: "Executor 端读写", code: "ConcurrentHashMap (JVM Singleton)" },
+      { line: "hash 算法", code: "SHA-256(funcName | model | prompt)" },
+      { line: "Driver 端 flush", code: "MERGE INTO + ROW_NUMBER 去重" },
+      { line: "重启级幂等", code: "loadFromDelta() 启动时反向加载到 globalCache" },
+    ],
+    measured: [
+      { label: "首次跑 100 行（cache miss）", value: "100 calls / 7421 tokens / 1046 ms", tone: "warn" },
+      { label: "重跑同 SQL（cache hit）", value: "0 calls / 0 tokens / 94 ms", tone: "ok" },
+      { label: "加速倍数（实测）", value: "~11×", tone: "ok" },
+    ],
+    caveat: "双层 hash 不一致（AIInferenceExec 用 cascade 字符串、HunyuanClient 用真实 model ID）；prompt 必须 row-deterministic；进程级缓存非分布式共享（多 executor 各一份）。",
+    source: "runtime/StateTable.scala · 195 行",
+  },
+  {
+    id: "router",
+    name: "ModelRouter",
+    subtitle: "小→大级联的两阶段决策",
+    tone: "violet",
+    pain: "硬编码全用大模型 → 简单分类也烧 30× 成本；静态阈值散落业务代码；小模型 5xx 不会自动兜底。",
+    principle: [
+      { line: "DSL 解析", code: "cascade(small=hy-mt2-pro, large=hy3-preview, threshold=0.85)" },
+      { line: "三种路径", code: "small_only / upgraded / fallback" },
+      { line: "置信度判断", code: "JSON 模式 → readTree 能解析；文本模式 → trim.length > 1" },
+    ],
+    measured: [
+      { label: "小模型一击命中（small_only）", value: "~95%", tone: "ok" },
+      { label: "升级到大模型（upgraded）", value: "~3%", tone: "warn" },
+      { label: "成本节省（vs 全用大模型）", value: "~86%", tone: "ok" },
+    ],
+    caveat: "confident() 太朴素（生产建议接 logprobs / PPL）；不学习历史（无 in-batch bandit）；threshold 字段读了没真用上；只支持 2 层级联。",
+    source: "runtime/ModelRouter.scala · 78 行",
+  },
+];
+
+function ComponentCard({ c }: { c: ComponentSpec }) {
+  const accent = {
+    amber: { border: "border-amber-500/30", bg: "from-amber-500/5", title: "text-amber" },
+    teal: { border: "border-teal/30", bg: "from-teal/5", title: "text-teal" },
+    violet: { border: "border-violet-500/30", bg: "from-violet-500/5", title: "text-violet-300" },
+  }[c.tone];
+
+  return (
+    <div className={`bg-gradient-to-br to-bgPanel border ${accent.border} rounded p-4`}>
+      <div className="flex items-baseline gap-2 mb-3">
+        <h3 className={`text-base font-bold ${accent.title}`}>{c.name}</h3>
+        <span className="text-textSub text-xs">·</span>
+        <span className="text-textSub text-xs">{c.subtitle}</span>
+        <span className="ml-auto text-textSub/70 text-[10px] font-mono">{c.source}</span>
+      </div>
+
+      {/* 痛点 */}
+      <div className="mb-3">
+        <div className="text-textSub text-[10px] uppercase tracking-wider mb-1">🔥 痛点</div>
+        <div className="text-textMain text-xs leading-relaxed">{c.pain}</div>
+      </div>
+
+      {/* 原理 */}
+      <div className="mb-3">
+        <div className="text-textSub text-[10px] uppercase tracking-wider mb-1.5">⚙ 原理</div>
+        <div className="space-y-1">
+          {c.principle.map((p, i) => (
+            <div key={i} className="text-xs flex gap-2 items-start">
+              <span className="text-textSub flex-none mt-0.5">▸</span>
+              <span className="text-textMain flex-none">{p.line}</span>
+              {p.code && (
+                <code className="text-[10px] text-textSub bg-bgDark/60 px-1.5 py-0.5 rounded font-mono break-all">
+                  {p.code}
+                </code>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 实测 */}
+      <div className="mb-3">
+        <div className="text-textSub text-[10px] uppercase tracking-wider mb-1.5">📊 实测数据</div>
+        <div className="grid grid-cols-3 gap-2">
+          {c.measured.map((m, i) => {
+            const tone =
+              m.tone === "ok"
+                ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-400"
+                : m.tone === "warn"
+                ? "border-rose-500/30 bg-rose-500/5 text-rose-300"
+                : "border-border bg-bgDark/30 text-textMain";
+            return (
+              <div key={i} className={`border rounded px-2 py-1.5 ${tone}`}>
+                <div className="text-[10px] text-textSub leading-tight">{m.label}</div>
+                <div className="text-xs font-mono font-bold mt-0.5">{m.value}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 局限 */}
+      <div>
+        <div className="text-textSub text-[10px] uppercase tracking-wider mb-1">⚠️ 已知局限</div>
+        <div className="text-textSub text-[11px] leading-relaxed italic">{c.caveat}</div>
       </div>
     </div>
   );

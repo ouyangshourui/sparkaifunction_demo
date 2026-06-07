@@ -288,11 +288,20 @@ token 估算用极简启发式（line 44）：`max(1, prompt.length / 3)` ——
 
 ##### 效果
 
-| 场景 | 不攒批 | DynamicBatcher | 收益 |
+> 注：以下数字分两栏 —— **本 demo 实测**（mock 模式 latency=5ms）和**生产估算**（按真实 LLM RTT≈300ms 推算）。
+> 项目运行可在 http://127.0.0.1:5193/insights 看实时累计指标。
+
+| 场景 | demo 实测（mock）| 生产估算（真实 RTT 300ms）| 备注 |
 | --- | --- | --- | --- |
-| 100 行短 prompt | 100 RTT × ~300ms = 30s | 7 批 × ~500ms = 3.5s | **~9× 加速**（消除 RTT 主导）|
-| 50 行长 prompt（每行 200 tokens）| 50 RTT，无 token 限制 | 按 token 维度切批 ≈ 12 批 | 防止单批超 8K 被网关 413 |
-| 极端：1 行超长（10K tokens）| 1 RTT 调用，可能直接 413 | 单行触发 token 上限，单独一批 | 安全降级，不连累其他行 |
+| 100 行短 prompt · 不攒批 | ~500 ms | ~30s | 100 RTT 串行主导 |
+| 100 行短 prompt · DynamicBatcher（默认 16）| **~1046 ms（首次跑）** | ~3.5s（≈ 7 批 × 500ms）| 实测来自 100 条 reviews `ai_classify`，**首次跑 cache miss** |
+| 100 行 · cache 全命中（重跑）| **~94 ms** | ~94 ms（lookup 不走网络）| 行级幂等命中，**实测真实数据** |
+| 50 行长 prompt（每行 200 tokens）| - | 按 token 维度切批 ≈ 12 批 | 防止单批超 8K 被网关 413 |
+| 极端：1 行超长（10K tokens）| - | 单行触发 token 上限，单独一批 | 安全降级，不连累其他行 |
+
+**关键观察**：
+- 行级幂等加速 = **~11×**（1046ms → 94ms，cache miss vs cache hit）— 实测稳定可复现
+- DynamicBatcher 在 demo 模式下加速不明显（mock 没 RTT），生产模式预计 **~9×**（按 100 行短 prompt 估算）
 
 ##### 局限
 
@@ -355,15 +364,17 @@ ConcurrentHashMap         ←──────  loadFromDelta() 启动时一次
 
 ##### 效果
 
-实测（100 条 reviews · `ai_classify`）：
+实测（100 条 reviews · `ai_classify` · demo mode auto · `commit 13760fe` 后采集）：
 
-| 步骤 | 真实 LLM 调用 | Tokens | 耗时 |
-| --- | --- | --- | --- |
-| 第一次跑 100 行 | 100 | ~7900 | ~3s |
-| **重跑同一条 SQL** | **0** ✓ | **0** ✓ | ~50 ms（纯 lookup）|
-| flush → 清 cache → load 后再跑 | **0** ✓ | **0** ✓ | ~80 ms（含一次 Iceberg load）|
+| 步骤 | 真实 LLM 调用 | Tokens | Spark elapsed | wall clock |
+| --- | --- | --- | --- | --- |
+| 第一次跑 100 行（cache miss）| 100（demo 路径）| **7421** | **1046 ms** | 1079 ms |
+| **重跑同一条 SQL（cache hit）** | **0** ✓ | **0** ✓ | **94 ms** | 126 ms |
+| flush → 清 cache → load 后再跑 | **0** ✓ | **0** ✓ | ~80 ms | ~110 ms |
 
 `cache_hit` 在 `routed_distribution` 单独计数，**不计入 `total_calls`**（commit `ffeb565` 修复）。
+节省金额（按 hy-mt2-pro ¥0.001/1k tokens 计）：单次重跑省 **¥0.0074**，每天若因任务挂掉重跑 60 次 ≈ **¥0.44/月**（按当前 100 行规模）。
+若业务量是当前 100×（每天 1 万行），**~¥44/月**；100 万行规模下 **~¥4400/月**。
 
 ##### 局限
 
