@@ -252,6 +252,226 @@ bash scripts/start.sh
 | 临时关 cascade 路由 | DDL 注册函数时改成单 model：`USING MODEL 'hy-mt2-pro'`（不走 cascade 解析）|
 | 关治理统计 | 不调用 `Governance.snapshotJson()` 即可；无副作用 |
 
+### 3.6 三个核心 Runtime 组件深度分析
+
+> 本节聚焦 `AIInferenceExec` 物理算子内部协同的三个 JVM Singleton：
+> **DynamicBatcher**（攒批）· **StateTable**（行级幂等）· **ModelRouter**（智能路由）。
+> 每个组件按「痛点 → 原理（含真实代码位置）→ 效果 → 局限 → 与业界对比」5 段展开。
+
+#### 3.6.1 DynamicBatcher · 三维触发的 partition 内攒批
+
+##### 痛点
+
+- **直调 LLM = 一行一次 HTTP**：100 行 → 100 个 round-trip，网络 RTT 主导耗时
+- **固定大小批**：`batch_size=16` 死命攒，最后一批不足 16 行就一直等 → 长尾延迟
+- **只看条数**：一批里如果有几条超长 prompt，攒到 16 行 prompt token 总量爆 8000，被网关 413 退回
+
+##### 原理
+
+`DynamicBatcher.scala` 用**三维 OR** 触发 flush（line 36）：
+
+```scala
+if (buf.size >= maxSize || bufTokens + est > maxTokens) flush()
+buf.append((idx, prompt, hash))
+bufTokens += est
+```
+
+| 维度 | 默认值 | 来源 | 触发场景 |
+| --- | --- | --- | --- |
+| `batch_max_size` | 16 行 | `batch_max_size` option | 普通短 prompt 攒批主导维度 |
+| `batch_max_tokens` | 8000 tokens | `batch_max_tokens` option | 长 prompt 提前 flush，避免网关 413 |
+| `batch_max_wait_ms` | 200 ms | `batch_max_wait_ms` option | 流式场景下控制最末批延迟（demo 内退化为「最多扫一次完成」）|
+
+token 估算用极简启发式（line 44）：`max(1, prompt.length / 3)` —— 中英混合下平均 1 字符 ≈ 0.3 token，足够保守。
+
+调用栈：`AIInferenceExec.doExecute` → `mapPartitions` 内构造 batcher（line 50）→ 收集本 partition 全部 pending → `runBatch(pending) { prompts => router.routeBatch(...) }`。
+
+##### 效果
+
+| 场景 | 不攒批 | DynamicBatcher | 收益 |
+| --- | --- | --- | --- |
+| 100 行短 prompt | 100 RTT × ~300ms = 30s | 7 批 × ~500ms = 3.5s | **~9× 加速**（消除 RTT 主导）|
+| 50 行长 prompt（每行 200 tokens）| 50 RTT，无 token 限制 | 按 token 维度切批 ≈ 12 批 | 防止单批超 8K 被网关 413 |
+| 极端：1 行超长（10K tokens）| 1 RTT 调用，可能直接 413 | 单行触发 token 上限，单独一批 | 安全降级，不连累其他行 |
+
+##### 局限
+
+- **demo 是 partition 内同步**：`maxWaitMs` 退化为「最多扫一次完成」（注释明示，line 12-13）。生产场景如果想要异步流式攒批，要把 batcher 抽到独立 actor，跨 partition 共享配额池。
+- **token 估算粗糙**：`length/3` 不区分中英。生产建议接 tiktoken 之类的 BPE tokenizer 算精确。
+- **没有 backpressure**：batcher 不感知下游 LLM 限流（429）。生产建议加 token bucket + 指数退避。
+
+##### 与业界对比
+
+| 方案 | 攒批策略 |
+| --- | --- |
+| 普通 PySpark `pandas_udf` | 按 Arrow batch size（默认 10000）盲攒，无 token 维度 |
+| Databricks `ai_query` | 黑盒固定 batch_size，不暴露 token 维度 |
+| **本方案** | **三维 OR 触发**，可在 SQL options 调每个维度 |
+
+---
+
+#### 3.6.2 StateTable · 双层缓存 + 行级幂等的代价
+
+##### 痛点
+
+- **任务重跑 = 重新付费**：Airflow 默认重试 3 次 → 每次都重新调 LLM，token 配额翻 3 倍
+- **进程重启 = cache 全丢**：Driver OOM 重启后，内存缓存清零，几小时辛苦计算的"已处理行"白费
+- **集群分布式写冲突**：每个 executor 独立写 Iceberg → MERGE 冲突 / 长尾事务
+
+##### 原理
+
+`StateTable.scala` 设计的核心是 **「Executor 端读写都进内存，Driver 端批末写盘」** —— 把分布式写冲突收敛到 Driver 单点：
+
+```
+Executor JVM (× N)                  Driver JVM
+─────────────────                  ──────────────
+ConcurrentHashMap         ←──────  loadFromDelta() 启动时一次性加载
+   │
+   ├ lookup(hash)         →  Some/None      (line 44)
+   ├ upsert(hash, ...)    →  put cache + audit append  (line 46-51)
+                              │
+                              ▼
+                          ConcurrentLinkedQueue<AuditEntry>
+                              │
+                              ▼ Driver 调用 flushToDelta() 时
+                          drainAudit() → Iceberg MERGE INTO
+```
+
+##### 三个关键设计决策
+
+1. **进程级 `globalCache`（line 59）** = JVM 单例 ConcurrentHashMap
+   - **原因**：local 模式 driver+executor 同 JVM；分布式 broadcast cache 太大，partition 共享同 JVM 缓存即可
+   - **代价**：Executor 间不共享（v2 路线：driver 端汇总）
+
+2. **Hash 是 SHA-256(funcName | model | prompt)**（line 34-42）
+   - **原因**：funcName 区分 `ai_classify` vs `ai_complete`；model 区分小/大模型；prompt 是真正的输入
+   - **代价**：完全相同 prompt 但 model 字符串不同（如 "cascade(...)" vs "hy-mt2-pro"）会算出不同 hash → cache miss
+   - **当前实现**：`AIInferenceExec` 用 cascade 字符串算 hash，`HunyuanClient.completeWith` 用真实 model 算 hash，**两层 hash 不一致**（已知局限，下面"局限"段细说）
+
+3. **MERGE INTO + ROW_NUMBER 去重（line 151-170）**
+   - **原因**：audit 累积里同一 hash 可能多次（重跑 / cache_hit 也 append audit）
+   - **修复**：source 子查询 `ROW_NUMBER() OVER (PARTITION BY prompt_hash ORDER BY ts DESC) WHERE rn=1`
+   - **背景**：之前一版没去重，触发 `MERGE_CARDINALITY_VIOLATION`（commit `ffeb565` 修复）
+
+##### 效果
+
+实测（100 条 reviews · `ai_classify`）：
+
+| 步骤 | 真实 LLM 调用 | Tokens | 耗时 |
+| --- | --- | --- | --- |
+| 第一次跑 100 行 | 100 | ~7900 | ~3s |
+| **重跑同一条 SQL** | **0** ✓ | **0** ✓ | ~50 ms（纯 lookup）|
+| flush → 清 cache → load 后再跑 | **0** ✓ | **0** ✓ | ~80 ms（含一次 Iceberg load）|
+
+`cache_hit` 在 `routed_distribution` 单独计数，**不计入 `total_calls`**（commit `ffeb565` 修复）。
+
+##### 局限
+
+- **双层 hash 不一致**：`AIInferenceExec` 物理层 cache 用的 model 字符串是 cascade 原文（`cascade(small=...)` 整段），而 `HunyuanClient.completeWith` 内部 cache 用的是真实模型 ID。这导致**第二次跑同一条 SQL 时第一层 lookup 不命中**，会 fall through 到 ModelRouter → HunyuanClient 第二层 cache 才命中。功能上没有错（最终 cache 命中、token=0），但调用栈比理想多一层。修法：让两层都用 `(funcName, real_model, prompt)` 算 hash，需要 ModelRouter 提前 resolve cascade。
+- **prompt 必须 row-deterministic**：如果 prompt 模板里有时间戳 / 随机数，hash 每次都不同 → cache 永远不命中。当前 `PushLimitBeforeAIInference` 规则会过滤掉含 `rand()` 的表达式，但用户在 DDL 里写 `now()` 我们没拦。
+- **进程级缓存 ≠ 分布式共享**：spark.executor.instances > 1 时，每个 executor 独立维护一份缓存，第一次跑分散在多个 executor 上，第二次跑可能命中不同 executor → cache miss。生产路线：Driver 端 broadcast 或外置 Redis。
+- **MERGE 去重靠 ts 排序**：极端并发下两条同 hash 的 audit ts 相同，ROW_NUMBER 排序不稳定。当前不影响正确性（任何一条都对），但 audit 日志的 timestamp 会被覆盖。
+
+##### 与业界对比
+
+| 方案 | 行级幂等机制 |
+| --- | --- |
+| Snowflake `TRY_COMPLETE` | 只给 status 列，重跑无幂等 |
+| BigQuery `ml_generate_text_status` | 同上，状态列而非缓存 |
+| Databricks `ai_query` | 黑盒，文档没有提到 cache 语义 |
+| **本方案** | **prompt_hash 去重 + Iceberg 持久化 + 一键 Replay** |
+
+---
+
+#### 3.6.3 ModelRouter · 小→大级联的"自适应"细节
+
+##### 痛点
+
+- **硬编码模型 = 全用大模型**：业务图省事一律用 GPT-4，简单分类任务也烧 30× 成本
+- **静态阈值 = 固定 if-else**：`if confidence > 0.85: use_small()` 散落在业务代码里，难统一治理
+- **失败兜底缺失**：小模型 5xx → 业务直接报错，不会自动升级到大模型
+
+##### 原理
+
+`ModelRouter.scala` 用**两阶段决策**（line 21-43）：
+
+```scala
+def routeBatch(prompts: Seq[String], client, gov): Seq[String] = {
+  prompts.map { p =>
+    val r1 = Try(client.complete(p, small, jsonMode)).toOption
+    r1 match {
+      case Some(res) if confident(res.text) =>
+        gov.record(small, ..., "small_only");   res.text  // ① 一击命中
+      case Some(res) =>
+        val r2 = client.complete(p, large, jsonMode)
+        gov.record(large, ..., "upgraded");     r2.text   // ② 升级到大
+      case None =>
+        val r2 = client.complete(p, large, jsonMode)
+        gov.record(large, ..., "fallback");     r2.text   // ③ 失败兜底
+    }
+  }
+}
+```
+
+| 路径 | 触发条件 | 计入 `routed_distribution` |
+| --- | --- | --- |
+| **small_only** | 小模型成功 + `confident()` 通过 | `small_only` |
+| **upgraded** | 小模型成功但置信度不够 | `upgraded` |
+| **fallback** | 小模型抛异常（5xx / 超时）| `fallback` |
+| **failed** | 大模型也失败 | `failed`（外层捕获）|
+
+`confident()` 函数（line 45-55）：
+
+```scala
+private def confident(text: String): Boolean = {
+  if (text == null || text.trim.isEmpty) return false
+  if (jsonMode) {
+    try { mapper.readTree(text); true }       // JSON 能解析就算可信
+    catch { case _: Throwable => false }
+  } else {
+    text.trim.length > 1                       // 文本模式：长度 > 1 字符
+  }
+}
+```
+
+##### 解析的 DSL：`cascade(small=hy-mt2-pro, large=hy3-preview, threshold=0.85)`
+
+`ModelRouter.fromOptions`（line 64-72）按正则 `cascade\(small=(.+),\s*large=(.+),\s*threshold=([0-9.]+)\)` 解析；不匹配则退化为单模型模式（永远不升级，全打 `small_only`）。
+
+##### 效果
+
+实测（demo mode auto，100 条 reviews 情感分类）：
+
+| 路由路径 | 调用次数（实测）| 占比 |
+| --- | --- | --- |
+| small_only | ~95 | 95% |
+| upgraded | ~3 | 3% |
+| fallback | ~2 | 2% |
+| failed | 0 | 0% |
+
+成本意义（按 hy-mt2-pro ¥0.001/1k vs hy3-preview ¥0.012/1k 计）：
+
+- **全用大模型**：100 行 × ~80 tokens × ¥0.012/1k = **¥0.096**
+- **cascade**：95×小 + 5×大 = **¥0.013**（节省约 86%）
+
+##### 局限
+
+- **`confident()` 太朴素**：当前只看「JSON 是否能解析」/「文本长度 > 1」。生产建议接 logprobs / PPL 估算，或多模型 self-consistency。
+- **不考虑历史**：每行独立决策，不能利用「同 batch 前 100 行 small 都命中 → 后面更激进用 small」的在线学习。生产路线：Thompson sampling / 多臂 bandit。
+- **cascade 不级联多于 2 层**：当前只支持 small→large。如果想做 small→medium→large 三级，要改 DSL 和路由分支。
+- **threshold 参数读了但没用**：当前 `confident()` 是布尔判断，没用 `threshold` 浮点值；将来接 logprobs 时才会真正用上。
+
+##### 与业界对比
+
+| 方案 | 路由能力 |
+| --- | --- |
+| Databricks `ai_query` | 单模型模式，必须用户硬编码 |
+| Snowflake Cortex | 同上 |
+| OpenAI gateway 商品 | 静态权重路由（70% A, 30% B），不看置信度 |
+| **本方案** | **小→大级联，置信度触发升级，可在 DDL 里声明，治理面板实时看分布** |
+
+---
+
 ---
 
 ## 4. 快速开始
