@@ -353,15 +353,13 @@ export default function Settings() {
                 <pre className="bg-bgPanel2 border border-amber rounded p-3 text-amber text-xs whitespace-pre-wrap">
                   {test.error_message}
                 </pre>
-                {test.error_code?.startsWith("HTTP_401") && (
-                  <Tip text="ApiKey 无效或未授权：请检查 sk- 前缀的 Key 是否完整、是否在控制台已激活。" />
-                )}
-                {test.error_code?.startsWith("HTTP_403") && (
-                  <Tip text="账号未开通该模型：去对应控制台开通后再试。" />
-                )}
-                {test.error_code === "EXCEPTION" && (
-                  <Tip text="网络异常：检查 base_url 是否填写正确、当前网络能否访问该域名。" />
-                )}
+                <ErrorDiagnosis
+                  code={test.error_code}
+                  message={test.error_message}
+                  baseUrl={form.base_url}
+                  apiKey={form.api_key}
+                  requestId={test.request_id}
+                />
               </div>
             )}
 
@@ -425,6 +423,136 @@ function Tip({ text }: { text: string }) {
   return (
     <div className="text-textSub text-xs mt-2 leading-relaxed border-l-2 border-amber pl-2">
       💡 {text}
+    </div>
+  );
+}
+
+// 把腾讯云网关 / OpenAI 兼容协议的常见错误码翻译成可执行的下一步动作
+function ErrorDiagnosis({
+  code,
+  message,
+  baseUrl,
+  apiKey,
+  requestId,
+}: {
+  code?: string | null;
+  message?: string | null;
+  baseUrl: string;
+  apiKey: string;
+  requestId?: string | null;
+}) {
+  const c = (code || "").toLowerCase();
+  const m = (message || "").toLowerCase();
+
+  // 鉴权类（最高频）
+  const isAuth =
+    c.startsWith("http_401") ||
+    c.startsWith("401") ||
+    c === "invalid_api_key" ||
+    c === "invalid_request_error" ||
+    m.includes("invalid api key") ||
+    m.includes("authentication") ||
+    m.includes("unauthorized");
+
+  // 余额 / 配额
+  const isQuota =
+    c.startsWith("http_402") ||
+    c.startsWith("http_429") ||
+    c.startsWith("429") ||
+    m.includes("quota") ||
+    m.includes("rate limit") ||
+    m.includes("欠费") ||
+    m.includes("insufficient");
+
+  // 权限 / 未开通
+  const isForbidden = c.startsWith("http_403") || c.startsWith("403");
+
+  // 网络异常
+  const isNetwork =
+    c === "exception" ||
+    m.includes("connect") ||
+    m.includes("timeout") ||
+    m.includes("getaddrinfo") ||
+    m.includes("ssl");
+
+  // 模型不存在
+  const isModelMissing =
+    c === "model_not_found" ||
+    m.includes("model not found") ||
+    m.includes("model does not exist") ||
+    m.includes("does not have access");
+
+  // ApiKey 长度提示（只做软校验，不阻断）
+  const keyLen = (apiKey || "").trim().length;
+  const keyShape = (apiKey || "").trim();
+  const keyLooksOdd =
+    keyShape.length > 0 &&
+    !keyShape.startsWith("sk-") &&
+    !keyShape.startsWith("Bearer ");
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      {isAuth && (
+        <>
+          <Tip text="ApiKey 无效（401002 / invalid_api_key）。这是腾讯云网关返回的鉴权错误，常见原因：" />
+          <ul className="text-xs text-textSub space-y-0.5 list-disc pl-6">
+            <li>
+              ApiKey 已被禁用或删除 →{" "}
+              <a
+                className="text-teal underline"
+                href="https://console.cloud.tencent.com/hunyuan/start"
+                target="_blank"
+                rel="noreferrer"
+              >
+                混元控制台
+              </a>{" "}
+              核对 / 重新生成
+            </li>
+            <li>
+              复制时漏字符 / 多空格（当前长度 <code className="text-textMain">{keyLen}</code>，
+              腾讯云 TokenHub 标准 Key 通常 51-52 字符）
+            </li>
+            {keyLooksOdd && (
+              <li className="text-amber">⚠ Key 不以 <code>sk-</code> 开头，可能被错误地复制了 Bearer 前缀或多余引号</li>
+            )}
+            <li>
+              ApiKey 与 base_url 不匹配（当前 base_url：
+              <code className="text-textMain font-mono">{baseUrl}</code>）
+              {!baseUrl.includes("tokenhub") && !baseUrl.includes("hunyuan") && (
+                <span className="text-amber"> ← TokenHub 签发的 Key 必须发到 tokenhub.tencentmaas.com</span>
+              )}
+            </li>
+            {requestId && (
+              <li>
+                提工单时附上 RequestId：{" "}
+                <code className="text-textMain font-mono select-all">{requestId}</code>
+              </li>
+            )}
+          </ul>
+        </>
+      )}
+
+      {isQuota && (
+        <Tip text="额度 / 限频问题：检查腾讯云账户余额、QPS 限额，或稍后重试。" />
+      )}
+
+      {isForbidden && !isAuth && (
+        <Tip text="403 Forbidden：账号未开通该模型，去对应控制台开通后再试。" />
+      )}
+
+      {isModelMissing && (
+        <Tip
+          text={`模型 id 不被网关识别：当前 small="${''}"，请确认 hy-mt2-pro / hy3-preview 等 id 拼写与网关一致。`}
+        />
+      )}
+
+      {isNetwork && (
+        <Tip text="网络异常：检查 base_url 是否填写正确、当前网络能否访问该域名（公司内网可能需走代理）。" />
+      )}
+
+      {!isAuth && !isQuota && !isForbidden && !isNetwork && !isModelMissing && (
+        <Tip text="未识别的错误码，原始 JSON 已展开在下方供排查。" />
+      )}
     </div>
   );
 }
