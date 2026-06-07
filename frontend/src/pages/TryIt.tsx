@@ -126,9 +126,12 @@ interface Act1Result {
 }
 
 function Act1() {
+  const [sql, setSql] = useState<string>(NATURAL_SQL);
   const [r, setR] = useState<Act1Result | null>(null);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState("");
+
+  const isModified = sql.trim() !== NATURAL_SQL.trim();
 
   const run = async () => {
     setRunning(true);
@@ -141,9 +144,9 @@ function Act1() {
       await resetMetrics().catch(() => {});
 
       const before = await getMetrics().catch(() => ({}));
-      const sqlResult = await executeSql(NATURAL_SQL, 10);
+      const sqlResult = await executeSql(sql, 10);
       const after = await getMetrics().catch(() => before);
-      const explain = await explainSql(NATURAL_SQL);
+      const explain = await explainSql(sql);
       setR({ sqlResult, explain, delta: diffSnapshot(before, after) });
     } catch (e: any) {
       setErr(e.response?.data?.detail ?? e.message);
@@ -162,7 +165,12 @@ function Act1() {
     >
       <div className="grid md:grid-cols-2 gap-4">
         <div>
-          <SqlBox sql={NATURAL_SQL} />
+          <SqlEditableBox
+            sql={sql}
+            onChange={setSql}
+            modified={isModified}
+            onReset={() => setSql(NATURAL_SQL)}
+          />
           <button
             onClick={run}
             disabled={running}
@@ -715,6 +723,56 @@ function SqlBox({ sql }: { sql: string }) {
   return (
     <div className="bg-bgDark border border-border rounded p-3">
       <pre className="text-xs font-mono text-textMain whitespace-pre-wrap leading-relaxed">{sql}</pre>
+    </div>
+  );
+}
+
+// Act 1 用：可编辑版 SqlBox，含「已修改」徽标 + 重置按钮
+// 不引入 Monaco（保持 TryIt 轻量），用原生 textarea + 等宽字体
+function SqlEditableBox({
+  sql,
+  onChange,
+  modified,
+  onReset,
+}: {
+  sql: string;
+  onChange: (v: string) => void;
+  modified: boolean;
+  onReset: () => void;
+}) {
+  // textarea 自适应行数（最少 6 行）
+  const lineCount = Math.max(6, sql.split("\n").length);
+  return (
+    <div className="bg-bgDark border border-border rounded">
+      <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-border text-[10px]">
+        <div className="flex items-center gap-2 text-textSub">
+          <span className="font-mono">SQL · 可直接编辑后再运行</span>
+          {modified && (
+            <span className="px-1.5 py-0.5 rounded bg-amber/15 text-amber border border-amber/30">
+              已修改
+            </span>
+          )}
+        </div>
+        {modified && (
+          <button
+            onClick={onReset}
+            className="text-textSub hover:text-teal underline decoration-dotted"
+            type="button"
+            title="恢复为默认 NATURAL_SQL"
+          >
+            ↺ 重置
+          </button>
+        )}
+      </div>
+      <textarea
+        value={sql}
+        onChange={(e) => onChange(e.target.value)}
+        rows={lineCount}
+        spellCheck={false}
+        className="w-full bg-bgDark text-textMain font-mono text-xs leading-relaxed
+                   px-3 py-2 resize-y outline-none focus:ring-1 focus:ring-teal/40 rounded-b"
+        placeholder="SELECT ai_classify(text, array('A','B')) FROM reviews LIMIT 3"
+      />
     </div>
   );
 }
