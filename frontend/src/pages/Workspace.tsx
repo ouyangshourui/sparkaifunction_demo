@@ -402,7 +402,9 @@ function FunctionsPanel() {
 
   const refresh = () => listFunctions().then(setList).catch(() => setList([]));
   useEffect(() => {
-    refresh();
+    // 后端冷启动可能 5-10s 才 ready，先等 1s 再首次拉取，避免 ECONNREFUSED
+    const t = setTimeout(refresh, 1000);
+    return () => clearTimeout(t);
   }, []);
 
   const submit = async () => {
@@ -423,7 +425,17 @@ function FunctionsPanel() {
       setMsg("✓ 已注册");
       refresh();
     } catch (e: any) {
-      setMsg(e.response?.data?.detail ?? e.message);
+      // axios 把网络错误 / 5xx 都序列化成 "Request failed with status code ..."
+      // 优先取后端 detail，再退化到 HTTP 状态描述，最后才是 e.message
+      const detail = e?.response?.data?.detail;
+      const status = e?.response?.status;
+      if (detail) {
+        setMsg(`✗ ${detail}`);
+      } else if (status) {
+        setMsg(`✗ HTTP ${status}（详细错误看后端日志 /tmp/aifn-logs/backend.log）`);
+      } else {
+        setMsg(`✗ ${e.message}（后端可能未就绪，稍候再试）`);
+      }
     }
   };
 

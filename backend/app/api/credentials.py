@@ -129,11 +129,26 @@ def get_credentials() -> CredentialsView:
 
 @router.put("")
 def put_credentials(payload: CredentialsPayload, request: Request) -> dict:
-    """落 .env + 更新 settings + 更新 os.environ + 重启 Spark 让 executorEnv 生效。"""
+    """落 .env + 更新 settings + 更新 os.environ + 仅在凭证/模型变化时才重启 Spark。
+
+    注意：重启 Spark 会清空所有运行时状态（metrics / cache / executions），
+    因此只有 api_key / base_url / 模型 id 真的变了才重启；
+    仅 demo_mode 切换不需要重启（HunyuanClient 每次 invoke 都会现读 env）。
+    """
     base_url = _normalize_base(payload.base_url)
     # 用户可能写 Hy3 preview / Hy-MT2-Pro 友好名 → 规范成网关 id
     small_id = normalize(payload.small_model, default="hy-mt2-pro")
     large_id = normalize(payload.large_model, default="hy3-preview")
+
+    # —— 判定是否需要重启 Spark ——
+    needs_restart = (
+        settings.HUNYUAN_API_KEY != payload.api_key
+        or settings.HUNYUAN_BASE_URL != base_url
+        or settings.DEFAULT_SMALL_MODEL != small_id
+        or settings.DEFAULT_LARGE_MODEL != large_id
+    )
+    # demo_mode 不在 needs_restart 里：HunyuanClient 每次都现读 os.environ['AIFN_DEMO_MODE']
+
     updates = {
         "HUNYUAN_API_KEY": payload.api_key,
         "HUNYUAN_BASE_URL": base_url,
@@ -155,26 +170,27 @@ def put_credentials(payload: CredentialsPayload, request: Request) -> dict:
     os.environ["HUNYUAN_BASE_URL"] = base_url
     os.environ["AIFN_DEMO_MODE"] = payload.demo_mode
 
-    # 重启 Spark 让 executorEnv 重新带上新凭证
+    # 仅在凭证/模型变化时重启 Spark（避免把 metrics / cache 全清）
     restarted = False
-    try:
-        from app.spark.session import build_spark
+    if needs_restart:
+        try:
+            from app.spark.session import build_spark
 
-        old = getattr(request.app.state, "spark", None)
-        if old is not None:
+            old = getattr(request.app.state, "spark", None)
+            if old is not None:
+                try:
+                    old.stop()
+                except Exception:
+                    pass
+            new_spark = build_spark()
             try:
-                old.stop()
+                new_spark.sql("USE local.default")
             except Exception:
                 pass
-        new_spark = build_spark()
-        try:
-            new_spark.sql("USE local.default")
-        except Exception:
-            pass
-        request.app.state.spark = new_spark
-        restarted = True
-    except Exception as e:
-        return {"ok": True, "saved": True, "spark_restarted": False, "warn": str(e)}
+            request.app.state.spark = new_spark
+            restarted = True
+        except Exception as e:
+            return {"ok": True, "saved": True, "spark_restarted": False, "warn": str(e)}
 
     return {
         "ok": True,
@@ -187,6 +203,22 @@ def put_credentials(payload: CredentialsPayload, request: Request) -> dict:
 @router.post("/test", response_model=TestResponse)
 def test_credentials(payload: CredentialsPayload) -> TestResponse:
     """用当前请求体凭证直接走 OpenAI 兼容协议调一次 chat/completions。"""
+    # —— 前置校验：避免把空 Authorization header 发出去拿到一头雾水的底层报错 ——
+    if not (payload.api_key or "").strip():
+        return TestResponse(
+            ok=False,
+            error_code="API_KEY_EMPTY",
+            error_message="请先填写 API Key 再点击测试（Authorization header 不能为空）",
+            elapsed_ms=0,
+        )
+    if not (payload.base_url or "").strip():
+        return TestResponse(
+            ok=False,
+            error_code="BASE_URL_EMPTY",
+            error_message="请填写 OpenAI 兼容 base_url（如 https://tokenhub.tencentmaas.com/v1）",
+            elapsed_ms=0,
+        )
+
     base_url = _normalize_base(payload.base_url)
     body = {
         "model": normalize(payload.small_model, default="hy-mt2-pro"),
