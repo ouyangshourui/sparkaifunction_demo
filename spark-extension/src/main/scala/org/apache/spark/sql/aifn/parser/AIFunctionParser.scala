@@ -151,10 +151,16 @@ class AIFunctionDdlBuilder(session: SparkSession) extends AIFunctionDdlBaseVisit
   }
 }
 
-/** 占位 LogicalPlan：CREATE AI FUNCTION 的执行结果（输出一行确认信息）。 */
-case class NoopCommand(message: String) extends org.apache.spark.sql.catalyst.plans.logical.Command {
+/**
+ * 占位 LogicalPlan：CREATE AI FUNCTION 执行后的"已完成"确认。
+ *
+ * 注：必须继承 `LeafRunnableCommand`（不是裸 `Command`），否则 Spark Planner
+ * 找不到对应 Strategy 会报 `AssertionError: No plan for NoopCommand`。
+ * `LeafRunnableCommand` 由 Spark 内置 `BasicOperators` Strategy 直接执行其 `run()` 方法。
+ */
+case class NoopCommand(message: String)
+    extends org.apache.spark.sql.execution.command.LeafRunnableCommand {
   override def output: Seq[org.apache.spark.sql.catalyst.expressions.Attribute] = Seq.empty
-  override def children: Seq[LogicalPlan] = Seq.empty
-  override protected def withNewChildrenInternal(
-      newChildren: IndexedSeq[LogicalPlan]): NoopCommand = this
+  override def run(spark: org.apache.spark.sql.SparkSession):
+      Seq[org.apache.spark.sql.Row] = Seq.empty
 }

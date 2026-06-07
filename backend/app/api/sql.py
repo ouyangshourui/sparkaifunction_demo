@@ -23,9 +23,22 @@ def execute(req: SqlRequest, request: Request) -> dict[str, Any]:
     sc.setLocalProperty("callSite.long", req.sql)
     sc.setLocalProperty("callSite.short", req.sql[:100])
     # 2) JobDescription：让 Spark UI 的 Jobs 页面 Description 列显示这条 SQL
-    #    （Jobs 页读的是 spark.job.description，独立于 callSite）
     sc.setJobDescription(req.sql)
-    df = spark.sql(req.sql)
+
+    # 多语句支持：按 ; 切分，依次执行，**只对最后一条**取结果集（与 spark-sql CLI 行为一致）。
+    # 这样用户可以一键跑 "CREATE AI FUNCTION ...; SELECT review_tag(...) FROM reviews;"
+    # 注释（-- 行 / /* 块 */）已被 _split_statements 处理。
+    statements = _split_statements(req.sql)
+    if not statements:
+        return {"rows": [], "schema": [], "elapsed_ms": 0, "row_count": 0}
+
+    df = None
+    for stmt in statements[:-1]:
+        # 中间语句：执行但不取结果（如 CREATE / SET / INSERT）
+        spark.sql(stmt)
+    # 最后一条：取结果
+    last = statements[-1]
+    df = spark.sql(last)
     # 强制初始化 QueryExecution，确保 SQL execution 被注册到 Spark UI 监听器
     _ = df._jdf.queryExecution()
     rows_list = df.limit(req.limit).collect()
@@ -33,6 +46,82 @@ def execute(req: SqlRequest, request: Request) -> dict[str, Any]:
     elapsed = int((time.monotonic() - t0) * 1000)
     schema = [{"name": f.name, "type": f.dataType.simpleString()} for f in df.schema.fields]
     return {"rows": rows, "schema": schema, "elapsed_ms": elapsed, "row_count": len(rows)}
+
+
+def _split_statements(sql: str) -> list[str]:
+    """按 `;` 切 SQL；忽略字符串字面量 / 块注释 / 行注释里的分号。"""
+    out: list[str] = []
+    buf: list[str] = []
+    i, n = 0, len(sql)
+    in_single = False  # ' ... '
+    in_double = False  # " ... "
+    in_line_comment = False  # -- ... \n
+    in_block_comment = False  # /* ... */
+    while i < n:
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < n else ""
+        if in_line_comment:
+            buf.append(ch)
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+        if in_block_comment:
+            buf.append(ch)
+            if ch == "*" and nxt == "/":
+                buf.append(nxt)
+                in_block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if in_single:
+            buf.append(ch)
+            if ch == "'" and (not buf or buf[-2:-1] != ["\\"]):
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            buf.append(ch)
+            if ch == '"' and (not buf or buf[-2:-1] != ["\\"]):
+                in_double = False
+            i += 1
+            continue
+        # 顶层
+        if ch == "-" and nxt == "-":
+            in_line_comment = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "*":
+            in_block_comment = True
+            buf.append(ch)
+            buf.append(nxt)
+            i += 2
+            continue
+        if ch == "'":
+            in_single = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == '"':
+            in_double = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == ";":
+            stmt = "".join(buf).strip()
+            if stmt:
+                out.append(stmt)
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        out.append(tail)
+    return out
 
 
 # ---------- EXPLAIN 树解析 ----------
