@@ -487,45 +487,64 @@ private def confident(text: String): Boolean = {
 
 ## 4. 快速开始
 
+### 4.0 一键启动（推荐）
+
 ```bash
-cd ai-function-demo
-
-# 1. 装依赖（首次）
-bash scripts/build.sh        # 构建 spark-extension JAR + 前端 vite build
-
-# 2. 启动（同时拉起 FastAPI 后端 + Vite dev server）
-bash scripts/start.sh
-
-# 3. 打开浏览器
-open http://127.0.0.1:49193
+cd sparkaifunction_demo
+bash scripts/dev.sh                # 启动后端 49088 + 前端 49193
+# 浏览器打开 http://127.0.0.1:49193
 ```
 
-### 4.1 配置 ApiKey（首次必填）
+`dev.sh` 子命令：
 
-进入 **Settings** 页 →
-
-* ApiKey：`sk-xxxx`（前往 [TokenHub 控制台](https://console.cloud.tencent.com/lkeap) 创建）
-* Base URL：默认 `https://tokenhub.tencentmaas.com/v1`
-* Small Model：`hy-mt2-pro`（点 chip 即可填）
-* Large Model：`hy3-preview`
-* Demo Mode：`auto`（推荐）
-
-点 **测试连接** 看到 `✓ 真实调用成功` 即生效；点 **保存并重启 Spark** 落 `.env` + 重启 SparkSession。
-
-### 4.2 跑一遍核心 demo
-
-```sql
--- Workbench → Sample 1
-SELECT id, text, ai_classify(text, array('正面','负面','中性')) AS sentiment
-FROM reviews LIMIT 10;
+```bash
+bash scripts/dev.sh                 # 启动（默认）
+bash scripts/dev.sh --rebuild       # 强制重编 spark-extension jar 再启
+bash scripts/dev.sh stop            # 停止所有服务
+bash scripts/dev.sh status          # 查看运行状态
 ```
 
-回到 **Monitor** 页应该能看到：
-* total_calls > 0
-* 模型分布：`hy-mt2-pro: N`
-* prompt/completion tokens 正常累计
+特点：
 
-点 **EXPLAIN** 切「图形」看物理计划，会看到 Filter 被下推到 `AIInferenceExec` 之下。
+- 后台 + `disown`，不阻塞 shell；可重入（重复跑会先 kill 旧进程）
+- 预检查：缺 `java/mvn/node/.env/jar/venv` 任一项都给清晰报错
+- 日志固定路径：`/tmp/aifn-logs/{backend,frontend}.log`
+- 端口选用高位非敏感：后端 **49088** / 前端 **49193**（避开公司常占的 5xxx 段）
+
+### 4.1 配置 ApiKey
+
+打开 http://127.0.0.1:49193/settings，按以下顺序填：
+
+| 字段 | 推荐值 | 备注 |
+| --- | --- | --- |
+| **ApiKey** | `sk-xxxxxxxxxxxx` | 从 [腾讯混元控制台](https://console.cloud.tencent.com/hunyuan/start) 申请；输入框会自动剥离 `✓ ✗ ⚠` 等图标，避免粘贴坏字符 |
+| **Base URL** | `https://tokenhub.tencentmaas.com/v1` | 默认值即可；点 chip 切 DeepSeek / OpenAI 也支持 |
+| **Small / Large Model** | `hy-mt2-pro` / `hy3-preview` | 点 chip 一键填 |
+| **Demo Mode** | `false`（默认） | `false` = 必须真实 API；`auto` = 失败降级 mock；`true` = 强制 mock |
+
+**两个按钮**：
+
+- 「**测试连接 · Chat Completions**」/「**测试连接 · Responses API**」：可切两个端点验 Key
+  - Chat Completions（项目生产路径）→ 解 `choices[0].message.content`
+  - Responses API（仅排查）→ 解 `output[0].content[0].text`
+  - 失败时按错误类别给可执行提示：鉴权 / 配额 / 未开通 / 网络 / 模型 id 错 / 非 ASCII
+- 「**保存并重启 Spark**」：写 `.env` + 重启 SparkSession（**仅在 ApiKey/base_url/模型 id 真变化时**才重启，避免清空 metrics/cache）
+
+> Insights 页顶部有腾讯云 TokenHub 凭证横幅，实时显示当前模式徽标（`真实 API` / `Demo Mock` / `未配置`）+ 申请入口直链。
+
+### 4.2 跑一遍核心 demo（11 步叙事）
+
+打开 http://127.0.0.1:49193，按顶部 4 个主 Tab 顺序：
+
+1. **Try It · 三幕剧**（最佳新人入口）
+   - Act 1：用户写最自然 SQL → 看 Plan 自动改写
+   - Act 2：SQLConf 一键开关 `spark.aifn.pushLimit.enabled`，对比开/关两种 Plan
+   - Act 3：100 行 ai_classify 首跑 7421 tokens / 重跑 0 tokens（cache_hit），重启后再跑仍 0 tokens
+2. **Workspace** · Monaco 编辑器 + 6 个 Sample（含 cascade DDL / Filter 下推 / LIMIT 下推对照）
+3. **Insights** · KPI Hero（钱 / 缓存命中 / 路由智能度）+ 三 Tab（成本趋势 / 行级幂等 / 段记录）
+4. **Architecture** · 5 个扩展点 + 3 个核心组件（DynamicBatcher / StateTable / ModelRouter）+ 实测数字
+
+EXPLAIN 抽屉在 Workspace 右侧，Plan 模式可切 baseline / pushdown / split / optimized；图形 / 文本两种展示。
 
 ---
 
@@ -543,54 +562,84 @@ FROM reviews LIMIT 10;
 ## 6. 目录结构
 
 ```
-ai-function-demo/
+sparkaifunction_demo/
 ├── backend/                  FastAPI · py4j 桥到 Spark
 │   ├── app/
-│   │   ├── api/              5 个 router (sql / functions / metrics / recovery / credentials)
+│   │   ├── api/              6 个 router
+│   │   │   ├── sql.py            execute / explain（多语句 SQL · split mode 计划对比）
+│   │   │   ├── functions.py      AI FUNCTION DDL 增删查
+│   │   │   ├── metrics.py        snapshot / reset / SSE stream
+│   │   │   ├── recovery.py       state / flush-delta / load-delta / replay / clear
+│   │   │   ├── credentials.py    GET/PUT 凭证 · POST /test（支持 chat / responses 端点）
+│   │   │   └── architecture.py   GET 自描述（5 扩展点 + 3 组件 + Spark 元数据）
 │   │   ├── spark/session.py  build_spark + executorEnv 透传
-│   │   ├── demo/seed.py      30 条 reviews + 20 条 tickets
+│   │   ├── demo/seed.py      100 条 reviews + 20 条 tickets
 │   │   ├── models_catalog.py 友好名 ↔ 网关 ID 单一来源
-│   │   ├── config.py         pydantic settings
-│   │   └── main.py           FastAPI 入口 / lifespan
-│   └── .env                  ApiKey / 默认模型
-├── spark-extension/          Scala · Catalyst Extensions
+│   │   ├── config.py         pydantic settings · AIFN_DEMO_MODE 默认 false
+│   │   └── main.py           FastAPI 入口 / lifespan / CORS 49193
+│   └── .env                  HUNYUAN_API_KEY / HUNYUAN_BASE_URL / 默认模型
+├── spark-extension/          Scala · Catalyst Extensions（24 *.scala / 1736 LOC）
 │   └── src/main/scala/org/apache/spark/sql/aifn/
-│       ├── AIFunctionExtension.scala   注册入口
-│       ├── parser/                     AI FUNCTION DDL
+│       ├── AIFunctionExtension.scala   注册入口（5 个 SparkSessionExtensions hook）
+│       ├── parser/                     CREATE AI FUNCTION DDL（ANTLR g4）
 │       ├── logical/AIInference.scala   逻辑算子
 │       ├── physical/AIInferenceExec.scala
-│       ├── optimizer/                  PushDownPredicate / MergeAI
+│       ├── optimizer/                  PushDownPredicate / MergeAI / PushLimitBeforeAIInference
 │       ├── strategy/AIInferenceStrategy.scala
 │       ├── expressions/                ai_classify / ai_complete / ai_extract
-│       └── runtime/                    HunyuanClient · Governance · ModelRouter · StateTable
+│       └── runtime/                    HunyuanClient · Governance · ModelRouter ·
+│                                        DynamicBatcher · StateTable
 ├── frontend/                 React 18 · Vite · Tailwind · ECharts · Monaco
-│   └── src/pages/{Workbench,Functions,Monitor,Recovery,Settings}.tsx
-├── scripts/{build,start}.sh
+│   └── src/
+│       ├── pages/            4 主 Tab + 齿轮 Settings
+│       │   ├── TryIt.tsx         三幕剧（自然 SQL / SQLConf 对比 / 100 行 cache hit）
+│       │   ├── Workspace.tsx     Monaco + 6 Sample + EXPLAIN 抽屉（图形 / 文本）
+│       │   ├── Insights.tsx      KPI Hero + 3 Tab（趋势 / 行级幂等 / 段记录）+ 凭证横幅
+│       │   ├── Architecture.tsx  5 扩展点 + 3 组件深度
+│       │   └── Settings.tsx      凭证 / 模型 / Demo 兜底 / Chat-Responses 切换
+│       ├── api/client.ts     axios 类型 + 端点封装
+│       └── lib/{pricing,segments}.ts  token 计费 · 历史段
+├── scripts/dev.sh            一键启停（start / stop / status / --rebuild）
 ├── warehouse/                Iceberg local catalog
-└── README.MD                 本文件
+├── .env.example              凭证 / Demo 兜底注释样例
+└── README.md                 本文件
 ```
 
 ---
 
-## 7. 重构变更清单（本次迭代）
+## 7. 重构变更清单
+
+### 7.1 v1 → v2（4 主 Tab 重构）
 
 * [+] `backend/app/models_catalog.py` 新增模型目录 + `normalize()`
-* [~] 默认模型统一切到 `hy-mt2-pro` / `hy3-preview`，覆盖：
-  * `backend/.env`
-  * `backend/app/config.py`
-  * `backend/app/api/credentials.py`（CredentialsPayload + PUT 规范化 + test 规范化）
-  * `frontend/src/pages/Settings.tsx`（initial + MODEL_PRESETS chip 选择器）
-  * `frontend/src/pages/Workbench.tsx`（Sample 4 cascade 写法）
-  * `frontend/src/pages/Functions.tsx`（DDL 默认 model）
-  * `spark-extension/.../expressions/{AIClassify,AIComplete,AIExtract}.scala`（fallback 默认值）
+* [~] 默认模型统一切到 `hy-mt2-pro` / `hy3-preview`
 * [+] `GET /api/credentials/models` 端点暴露目录 + 当前默认
-* [~] BASE_PRESETS 把 TokenHub 提到第一位（与默认 `.env` 一致）
+* [+] `GET /api/architecture` 自描述 API（驱动 `/architecture` 页）
+* [+] `frontend/src/pages/{TryIt,Workspace,Insights,Architecture}.tsx` 新 4 主页
+* [-] 旧 `{Workbench,Functions,Monitor,Recovery}.tsx` 共 4 页 -1638 行
+* [+] `Optimizer · PushLimitBeforeAIInference` SQLConf 开关 `spark.aifn.pushLimit.enabled`
+* [+] `Governance.recordCacheHit()` 缓存命中只增分布不增 total_calls
+
+### 7.2 当前迭代（凭证 / 错误诊断 / 启动脚本）
+
+| Commit | 主题 | 影响面 |
+| --- | --- | --- |
+| `54b1469` | `scripts/dev.sh` 一键启停（start / stop / status / --rebuild）+ 端口 49088/49193 | 启动体验 |
+| `c7db5e7` | `PUT /credentials` 仅在凭证/模型真变化时才重启 Spark；空 api_key 友好提示；前端 `useEffect` 冷启动延迟 1s 拉取 | metrics/cache 不再被无意义重启清空 |
+| `c8751f1` | Insights 顶部腾讯云 TokenHub 凭证横幅（控制台直链 / API 地址 / 模式徽标 / Settings 跳转） | Insights 页 |
+| `4681b82` | Settings 凭证测试增强 `ErrorDiagnosis` 组件：识别 401002 / 配额 / 网络 / 模型不存在 / 非 ASCII 五类 | Settings 页 |
+| `8e44fdb` | `POST /credentials/test` 加 `endpoint` 字段（`chat` \| `responses`），按 endpoint 分两套请求体 / 响应解析；前端二选一卡片切换 | 测试连接 |
+| `0c26b0f` | 非 ASCII 字符（`✓ ✗ ⚠`）三层防御：前端 input 实时 sanitize / `/test` 校验 / `PUT` 校验；`AIFN_DEMO_MODE` 默认从 `auto` 改为 `false`；`.env.example` 重写为 OpenAI 兼容凭证模式 | 凭证安全 / 默认体验 |
 
 ---
 
 ## 8. 已知限制 / 注意事项
 
 * **凭证只走环境变量**：local 模式 driver/executor 同 JVM；分布式时需要 `spark.executorEnv.*` 透传（已实现）。
-* **Monitor 数据为 JVM 单例**，进程重启后清零（点 Monitor 页的「重置」即可主动清）。
-* **TokenHub `/v1/models` 不开放**：模型目录只能客户端维护，不能动态拉。
-* **`AIFN_DEMO_MODE=auto`** 时真实调用失败会无声降级到 mock；要确认真实 API，请切到 `false` 严格模式。
+* **Metrics / Cache 在 JVM 内**：进程重启清零；点 Insights → 「重置」可手动清。但 prompt_hash → output 已落 Iceberg，下次启动自动 `replay` 恢复。
+* **TokenHub `/v1/models` 不开放**：模型目录只能客户端维护（`backend/app/models_catalog.py`），不能动态拉。
+* **`AIFN_DEMO_MODE` 默认 `false`（必须真实 API）**：未填 ApiKey 调用会直接抛错；如要离线演示请切到 `auto`（失败降级 mock）或 `true`（强制 mock）。
+* **Authorization header 必须 ASCII**：ApiKey 含非 ASCII（如复制 toast 时带进了 `✓ ✗ ⚠` 等图标）会被前端 `sanitizeAscii` 实时剥离 + 后端二次校验；详见 commit `0c26b0f`。
+* **`PUT /api/credentials` 仅在凭证/模型真变化时重启 Spark**：仅切 `demo_mode` 不会清空 metrics（commit `c7db5e7`）。
+* **测试连接的 endpoint 选择仅影响 `/test`**：项目实际生产路径（HunyuanClient.scala）始终走 `/chat/completions`；选 `Responses API` 只是验 Key 在另一条路径上是否同样可用。
+
