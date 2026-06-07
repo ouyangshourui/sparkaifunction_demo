@@ -12,15 +12,18 @@
  * 头号 KPI = 省了多少钱（按 token 价折算），这是 PM 视角能直接报给老板的指标。
  */
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import ReactECharts from "echarts-for-react";
 import {
   clearState,
   flushDelta,
+  getCredentials,
   getMetrics,
   listState,
   loadDelta,
   replay,
   resetMetrics,
+  type CredentialsView,
   type MetricsSnapshot,
   type StateView,
 } from "../api/client";
@@ -29,15 +32,21 @@ import { fmtCNY, totalCost } from "../lib/pricing";
 
 type Tab = "trend" | "idempotency" | "segments";
 
+// 腾讯云相关外链（页面顶部凭证横幅 & KPI Hero 共用）
+const TENCENT_CONSOLE = "https://console.cloud.tencent.com/hunyuan/start";
+const TOKENHUB_BASE = "https://tokenhub.tencentmaas.com/v1";
+
 export default function Insights() {
   const [m, setM] = useState<MetricsSnapshot>({});
   const [state, setState] = useState<StateView | null>(null);
+  const [cred, setCred] = useState<CredentialsView | null>(null);
   const [tab, setTab] = useState<Tab>("trend");
 
   useEffect(() => {
     const tick = () => {
       getMetrics().then(setM).catch(() => {});
       listState().then(setState).catch(() => {});
+      getCredentials().then(setCred).catch(() => {});
     };
     tick();
     const id = setInterval(tick, 2000);
@@ -47,6 +56,9 @@ export default function Insights() {
   return (
     <div className="h-full overflow-auto">
       <div className="max-w-7xl mx-auto p-4 space-y-4">
+        {/* 凭证状态横幅：腾讯云 TokenHub 申请入口 / API 地址 / 当前配置 */}
+        <CredBanner cred={cred} />
+
         {/* KPI Hero */}
         <KpiHero m={m} state={state} />
 
@@ -87,6 +99,74 @@ export default function Insights() {
           {tab === "segments" && <SegmentsTab />}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// 凭证横幅 —— 腾讯云 TokenHub 入口 / API 地址 / 当前配置态
+// ============================================================
+function CredBanner({ cred }: { cred: CredentialsView | null }) {
+  // 当前 base_url 是否就是 TokenHub
+  const isTokenHub = (cred?.base_url || "").startsWith("https://tokenhub.tencentmaas.com");
+  const configured = !!cred?.api_key_set;
+  const mode = cred?.demo_mode || "auto";
+
+  // 真实模式 vs Demo 模式徽标
+  const modeBadge =
+    mode === "force_mock"
+      ? { text: "Demo Mock", cls: "bg-amber/15 text-amber border-amber/30" }
+      : configured
+      ? { text: "真实 API", cls: "bg-teal/15 text-teal border-teal/30" }
+      : { text: "未配置 · 走 Demo", cls: "bg-textSub/10 text-textSub border-border" };
+
+  return (
+    <div className="rounded-lg border border-border bg-bgPanel px-4 py-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="text-textSub">腾讯云 TokenHub</span>
+        <span className={`px-2 py-0.5 rounded border ${modeBadge.cls}`}>{modeBadge.text}</span>
+      </div>
+
+      {/* 申请 / 管理 ApiKey */}
+      <a
+        href={TENCENT_CONSOLE}
+        target="_blank"
+        rel="noreferrer"
+        className="text-teal hover:text-tealDeep underline decoration-dotted underline-offset-2"
+        title="腾讯云控制台 · 申请 / 管理 ApiKey"
+      >
+        🔑 控制台申请 ApiKey ↗
+      </a>
+
+      {/* OpenAI 兼容 base_url */}
+      <span className="text-textSub flex items-center gap-1">
+        API:
+        <code className="font-mono text-textMain bg-bgPanel2 px-1.5 py-0.5 rounded border border-border">
+          {cred?.base_url || TOKENHUB_BASE}
+        </code>
+        {!isTokenHub && cred && (
+          <span className="text-amber" title="当前 base_url 非 TokenHub 默认地址">
+            ⚠
+          </span>
+        )}
+      </span>
+
+      {/* 模型 id */}
+      {cred && (
+        <span className="text-textSub">
+          模型: <code className="text-textMain font-mono">{cred.small_model}</code>
+          <span className="mx-1 text-textSub/50">/</span>
+          <code className="text-textMain font-mono">{cred.large_model}</code>
+        </span>
+      )}
+
+      {/* 去 Settings 改 */}
+      <Link
+        to="/settings"
+        className="ml-auto px-2 py-1 rounded bg-bgPanel2 hover:bg-bgPanel border border-border text-textMain"
+      >
+        ⚙ 去 Settings 配置
+      </Link>
     </div>
   );
 }
