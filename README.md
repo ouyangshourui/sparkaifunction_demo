@@ -45,7 +45,7 @@
 
 > 📌 下方 §1-§8 为最初 v1 PRD（5 Tab 命名 Workbench/Functions/Monitor/Recovery/Settings）。
 > 当前 SPA 已重构为 4 主 Tab：**Try It · Workspace · Insights · Architecture** + 齿轮 Settings；
-> 实际页面结构见 `frontend/src/App.tsx` 或访问 http://127.0.0.1:5193。
+> 实际页面结构见 `frontend/src/App.tsx` 或访问 http://127.0.0.1:49193。
 
 ---
 
@@ -289,7 +289,7 @@ token 估算用极简启发式（line 44）：`max(1, prompt.length / 3)` ——
 ##### 效果
 
 > 注：以下数字分两栏 —— **本 demo 实测**（mock 模式 latency=5ms）和**生产估算**（按真实 LLM RTT≈300ms 推算）。
-> 项目运行可在 http://127.0.0.1:5193/insights 看实时累计指标。
+> 项目运行可在 http://127.0.0.1:49193/insights 看实时累计指标。
 
 | 场景 | demo 实测（mock）| 生产估算（真实 RTT 300ms）| 备注 |
 | --- | --- | --- | --- |
@@ -497,7 +497,7 @@ bash scripts/build.sh        # 构建 spark-extension JAR + 前端 vite build
 bash scripts/start.sh
 
 # 3. 打开浏览器
-open http://127.0.0.1:5193
+open http://127.0.0.1:49193
 ```
 
 ### 4.1 配置 ApiKey（首次必填）

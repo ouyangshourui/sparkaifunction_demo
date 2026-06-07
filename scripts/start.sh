@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键启动后端 (FastAPI :8088) + 前端 (Vite :5193)
+# 一键启动后端 (FastAPI :49088) + 前端 (Vite :49193)
 # 用法：bash scripts/start.sh
 set -euo pipefail
 
@@ -43,14 +43,14 @@ if [[ -d "$PYSPARK_DIR" ]]; then
 fi
 
 # 4. 启动后端
-echo "▶ 启动后端 (FastAPI :8088)"
+echo "▶ 启动后端 (FastAPI :49088)"
 ( cd "$DIR/backend" && \
   "$DIR/backend/.venv/bin/python" -m uvicorn app.main:app \
-    --host 127.0.0.1 --port 8088 --log-level info ) &
+    --host 127.0.0.1 --port 49088 --log-level info ) &
 BACKEND_PID=$!
 
 # 5. 启动前端
-echo "▶ 启动前端 (Vite :5193)"
+echo "▶ 启动前端 (Vite :49193)"
 ( cd "$DIR/frontend" && \
   ( [[ -d node_modules ]] || npm install ) && \
   npm run dev ) &
@@ -60,8 +60,8 @@ trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true" EXIT INT TERM
 
 echo ""
 echo "============================================================"
-echo " ✅ 后端 http://127.0.0.1:8088   /api/health"
-echo " ✅ 前端 http://127.0.0.1:5193   SQL Workbench"
+echo " ✅ 后端 http://127.0.0.1:49088   /api/health"
+echo " ✅ 前端 http://127.0.0.1:49193   SQL Workbench"
 echo "============================================================"
 
 wait

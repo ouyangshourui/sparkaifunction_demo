@@ -52,7 +52,7 @@ app = FastAPI(title="AI Function Demo Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5193", "http://127.0.0.1:5193"],
+    allow_origins=["http://localhost:49193", "http://127.0.0.1:49193"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
