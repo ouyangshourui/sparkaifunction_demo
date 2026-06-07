@@ -94,6 +94,11 @@ class HunyuanClient(apiKey: String, baseUrl: String) {
   /**
    * Expression 友好入口：在真正调用网关前做 prompt_hash 查询，命中则零 token 返回；
    * 未命中正常调用，并把结果写回 StateTable.cache + audit。
+   *
+   * 注：cache_hit 路径下 record 的 routed=cache_hit，但 token=0 / latency=0；
+   *     Governance.record 会同时更新 routed_distribution.cache_hit 和 total_calls。
+   *     如果你只想看「真实 LLM 调用次数」，看 demo_count + small_only + upgraded + fallback；
+   *     `total_calls` = 真实调用 + cache_hit（含义见 Governance.scala）。
    */
   def completeWith(prompt: String, model: String, jsonMode: Boolean, funcName: String): Result = {
     val state = StateTable.handle(StateTable.defaultTableName)
@@ -101,7 +106,8 @@ class HunyuanClient(apiKey: String, baseUrl: String) {
     state.lookup(hash) match {
       case Some(cached) =>
         val r = Result(cached, 0, 0, 0L, s"$model[cache]")
-        recordToGovernance(r.model, 0, 0, 0L, "cache_hit")
+        // 只更新 routed 分布，不增 total_calls / token / latency —— 让用户看到的「真实调用次数」=0
+        Governance.instance.foreach(_.recordCacheHit())
         return r
       case None => // fall through
     }

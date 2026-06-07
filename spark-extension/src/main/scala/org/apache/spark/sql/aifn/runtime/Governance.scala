@@ -45,6 +45,15 @@ class Governance(
     }
   }
 
+  /**
+   * 命中行级幂等 cache，只更新 routed_distribution.cache_hit 计数；
+   * 不增 total_calls / total_tokens / latency —— 这样 UI 看到的「真实 LLM 调用次数」 = total_calls
+   * 与 cache_hit 各自独立，避免混淆。
+   */
+  def recordCacheHit(): Unit = {
+    routedDist.computeIfAbsent("cache_hit", _ => new LongAdder()).increment()
+  }
+
   /** 返回 Java Map（py4j 友好），避免 Scala Map 的桥接问题。 */
   def snapshotJava(): java.util.Map[String, Any] = {
     import scala.collection.JavaConverters._

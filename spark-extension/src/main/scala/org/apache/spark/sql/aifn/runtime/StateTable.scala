@@ -145,10 +145,22 @@ object StateTable {
          |""".stripMargin)
 
     // 2. MERGE INTO（幂等，Iceberg 1.6 原生支持 v2 MERGE）
+    //    source 子查询用 ROW_NUMBER 按 prompt_hash 去重，保留 ts 最新一条；
+    //    防止 audit 累积里同一 hash 出现多次（来自 cache_hit / 重跑）触发
+    //    MERGE_CARDINALITY_VIOLATION 错误。
     spark.sql(
       s"""
          |MERGE INTO $tableName AS t
-         |USING (SELECT * FROM $tmpView) AS s
+         |USING (
+         |  SELECT prompt_hash, function_name, model, prompt_preview, output, status, ts
+         |  FROM (
+         |    SELECT *, ROW_NUMBER() OVER (
+         |      PARTITION BY prompt_hash ORDER BY ts DESC
+         |    ) AS rn
+         |    FROM $tmpView
+         |  )
+         |  WHERE rn = 1
+         |) AS s
          |ON t.prompt_hash = s.prompt_hash
          |WHEN MATCHED THEN UPDATE SET
          |  t.output = s.output,
