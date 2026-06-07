@@ -179,6 +179,79 @@ Strategy → AIInferenceExec
 > ⚠️ TokenHub 网关只识别**小写连字符**形式（`hy3-preview`），含空格 / 驼峰 / 下划线均会返回 `400004 model not found`。
 > 后端 `models_catalog.normalize()` 自动把用户输入规范化。
 
+### 3.5 零侵入设计：为什么能跟开源 Spark 同步迭代
+
+> **一句话**：我们没改 Spark 一行源码，只在 Spark **官方暴露的扩展点**（`SparkSessionExtensions`）上注册了 5 个 hook。
+> Spark 升级 → 换二进制即可，不需要重新合并补丁、重 fork、重打 jar。
+
+#### 3.5.1 三个事实（可验证）
+
+| # | 事实 | 凭证 |
+| --- | --- | --- |
+| **F1** | **没有 fork Spark** | 项目根目录无 `spark/` 子模块；`spark-extension/pom.xml` 中 `spark-core` / `spark-sql` / `spark-catalyst` 依赖全部 `<scope>provided</scope>`，由集群运行时 Spark 提供 |
+| **F2** | **没有改过 Spark 任何 jar** | 项目产物只有一个 `aifn-spark-extension-0.1.0.jar`（约 3.3 MB），与 `$SPARK_HOME/jars/*` 完全隔离 |
+| **F3** | **加载方式是标准的 plugin 入口** | 启动加 `--conf spark.sql.extensions=org.apache.spark.sql.aifn.AIFunctionExtension` 即生效；去掉这一项，Spark 行为完全恢复成原生 |
+
+#### 3.5.2 5 个标准注入点（全部来自 `SparkSessionExtensions` 官方 API）
+
+`AIFunctionExtension.scala` 全文 59 行，是唯一接入点：
+
+| # | 注入点 | Spark 官方 API | 我们的扩展 |
+| --- | --- | --- | --- |
+| 1 | **Parser** | `injectParser` | `AIFunctionParser` 扩展 SQL 语法（`CREATE AI FUNCTION` DDL）|
+| 2 | **Optimizer Rules** | `injectOptimizerRule` × 3 | `PushDownPredicateThroughAI` / `MergeAIInvocations` / `AICostModel` |
+| 3 | **PostHoc Resolution Rule** | `injectPostHocResolutionRule` | `PushLimitBeforeAIInference`（Analyzer 后、Optimizer 前一次性下推 LocalLimit）|
+| 4 | **Planner Strategy** | `injectPlannerStrategy` | `AIInferenceStrategy` 把 `AIInference` 逻辑节点翻译成 `AIInferenceExec` 物理算子 |
+| 5 | **Function Registry** | `injectFunction` × 3 | `ai_classify` / `ai_complete` / `ai_extract` 内置函数 |
+
+> 这 5 个 API 是 Spark 自 2.2 以来就稳定的扩展契约，跨 Spark 3.x → 4.x 的兼容性由 Spark 团队维护。
+
+#### 3.5.3 与其他方案的对比（Spark 升级时谁更省事）
+
+| 维度 | Fork Spark | 写普通 UDF | **本方案 · Catalyst Extension** |
+| --- | --- | --- | --- |
+| Spark 源码改动 | 数百~数千行 | 0 行 | **0 行** |
+| 升级 Spark 版本 | 重新合并冲突，回归测试 | 重编 UDF jar | **直接换 Spark 二进制** |
+| 可被 Catalyst 优化 | ✓ | ✗（UDF 是黑盒）| **✓**（一等 LogicalPlan）|
+| 谓词下推 / Limit 下推 | ✓ | ✗ | **✓**（自定义规则）|
+| EXPLAIN 可读性 | ✓ | `ScalaUDF#xxx` 看不出是 AI | **✓ `AIInferenceExec`** |
+| 卸载 / 回滚 | 回滚 Spark 二进制 | 改 SQL 删 UDF | **去掉 `--conf` 一行配置** |
+| 与 Iceberg / Delta 共存 | 重新合并冲突 | 无影响 | **同时启用多个 extension（逗号分隔）** |
+
+我们演示环境就是 Iceberg + 本扩展共用一个 SparkSession：
+
+```bash
+--conf spark.sql.extensions=\
+  org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,\
+  org.apache.spark.sql.aifn.AIFunctionExtension
+```
+
+#### 3.5.4 升级 Spark 3.5 → 3.6 / 4.0 的实际步骤
+
+```bash
+# 1. 替换 Spark 二进制
+SPARK_HOME=/path/to/spark-3.6.0-bin-hadoop3
+
+# 2. 我们的扩展 jar 不动（除非 SparkSessionExtensions API 变化，2.2+ 至今稳定）
+ls spark-extension/target/aifn-spark-extension-0.1.0.jar
+
+# 3. 重启服务
+bash scripts/start.sh
+```
+
+> ⚠️ 唯一可能要重编的场景：Spark 大版本变化导致 Catalyst 内部树（`LogicalPlan` / `Project` / `LocalLimit` 等）的 case class 字段变更——
+> 但这种变更 Spark 团队会保留 binary compatibility（标 `@DeveloperApi`），实际 3.x → 4.x 也没大改这些核心类。
+> 如果遇到，重编 spark-extension（一条 `mvn package`）即可。
+
+#### 3.5.5 一键卸载 / 关闭某条规则
+
+| 想做的事 | 做法 |
+| --- | --- |
+| 完全卸载扩展 | 启动参数去掉 `--conf spark.sql.extensions=...AIFunctionExtension`；Spark 立刻恢复原生 |
+| 只关 LIMIT 下推规则（保留其他能力） | `SET spark.aifn.pushLimit.enabled=false`（运行时切换，无需重启）|
+| 临时关 cascade 路由 | DDL 注册函数时改成单 model：`USING MODEL 'hy-mt2-pro'`（不走 cascade 解析）|
+| 关治理统计 | 不调用 `Governance.snapshotJson()` 即可；无副作用 |
+
 ---
 
 ## 4. 快速开始
