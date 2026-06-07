@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     WAREHOUSE_PATH: str = "./warehouse"
     STATE_TABLE: str = "ai_function_state"
     AIFN_JAR_PATH: str = "../spark-extension/target/aifn-spark-extension-0.1.0.jar"
-    AIFN_DEMO_MODE: str = "auto"
+    AIFN_DEMO_MODE: str = "false"  # 默认必须真实 API；改 auto 才会失败降级 mock
 
     BATCH_MAX_SIZE: int = 16
     BATCH_MAX_WAIT_MS: int = 200

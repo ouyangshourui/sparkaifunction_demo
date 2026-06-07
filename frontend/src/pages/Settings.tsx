@@ -9,8 +9,8 @@ import {
 } from "../api/client";
 
 const DEMO_OPTIONS = [
-  { v: "auto", label: "auto（推荐：失败自动降级 mock）" },
-  { v: "false", label: "false（严格模式：必须真实 API）" },
+  { v: "false", label: "false（推荐：必须真实 API · 默认）" },
+  { v: "auto", label: "auto（失败自动降级 mock）" },
   { v: "true", label: "true（强制 mock，离线演示）" },
 ];
 
@@ -40,8 +40,18 @@ const initial: CredentialsPayload = {
   base_url: "https://tokenhub.tencentmaas.com/v1",
   small_model: "hy-mt2-pro",
   large_model: "hy3-preview",
-  demo_mode: "auto",
+  demo_mode: "false",
 };
+
+// 剥离非 ASCII 字符（特别针对从错误提示里复制的 ✓ ✗ ⚠ 💡 🔑 等图标），
+// 同时去掉首尾空白与中间空白；用在 ApiKey / base_url 输入框 onChange 上，
+// 让坏字符根本进不来 state（避免 httpx 把它放进 Authorization header 抛 ascii 编码错）
+function sanitizeAscii(s: string): string {
+  return (s || "")
+    .replace(/[^\x20-\x7E]/g, "") // 只保留可打印 ASCII（0x20-0x7E）
+    .replace(/\s+/g, "") // ApiKey / URL 不允许空白
+    .trim();
+}
 
 // 测试连接的接口选择（只影响 /api/credentials/test，不影响生产路径）
 type TestEndpoint = "chat" | "responses";
@@ -198,7 +208,7 @@ export default function Settings() {
             className={input}
             placeholder="sk-xxxxxxxxxxxxxxxx"
             value={form.api_key}
-            onChange={(e) => set("api_key", e.target.value.trim())}
+            onChange={(e) => set("api_key", sanitizeAscii(e.target.value))}
           />
         </Field>
 
@@ -208,7 +218,7 @@ export default function Settings() {
               className={input}
               placeholder="https://api.hunyuan.cloud.tencent.com/v1"
               value={form.base_url}
-              onChange={(e) => set("base_url", e.target.value.trim())}
+              onChange={(e) => set("base_url", sanitizeAscii(e.target.value))}
             />
             <div className="flex gap-1.5 flex-wrap">
               {BASE_PRESETS.map((p) => (
@@ -485,6 +495,13 @@ function ErrorDiagnosis({
   const c = (code || "").toLowerCase();
   const m = (message || "").toLowerCase();
 
+  // 含非 ASCII 字符（前端已做 sanitize，这里兜底诊断）
+  const isNonAscii =
+    c === "api_key_non_ascii" ||
+    c === "base_url_non_ascii" ||
+    m.includes("ascii") ||
+    m.includes("\\u");
+
   // 鉴权类（最高频）
   const isAuth =
     c.startsWith("http_401") ||
@@ -533,7 +550,17 @@ function ErrorDiagnosis({
 
   return (
     <div className="mt-2 space-y-1.5">
-      {isAuth && (
+      {isNonAscii && (
+        <>
+          <Tip text="ApiKey / base_url 含非 ASCII 字符（如 ✓ ✗ ⚠ 等图标）：通常是从错误提示里复制时把图标一起带进来了。" />
+          <ul className="text-xs text-textSub space-y-0.5 list-disc pl-6">
+            <li>已自动剥离不可打印字符；请重新粘贴一段纯 sk-xxxx 形式的 Key 再试</li>
+            <li>建议从控制台复制时只选中 sk- 开头到末尾的字符串本体</li>
+          </ul>
+        </>
+      )}
+
+      {isAuth && !isNonAscii && (
         <>
           <Tip text="ApiKey 无效（401002 / invalid_api_key）。这是腾讯云网关返回的鉴权错误，常见原因：" />
           <ul className="text-xs text-textSub space-y-0.5 list-disc pl-6">
@@ -591,7 +618,7 @@ function ErrorDiagnosis({
         <Tip text="网络异常：检查 base_url 是否填写正确、当前网络能否访问该域名（公司内网可能需走代理）。" />
       )}
 
-      {!isAuth && !isQuota && !isForbidden && !isNetwork && !isModelMissing && (
+      {!isAuth && !isQuota && !isForbidden && !isNetwork && !isModelMissing && !isNonAscii && (
         <Tip text="未识别的错误码，原始 JSON 已展开在下方供排查。" />
       )}
     </div>

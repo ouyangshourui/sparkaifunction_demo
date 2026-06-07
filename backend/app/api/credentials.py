@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -46,7 +46,7 @@ class CredentialsPayload(BaseModel):
     )
     small_model: str = Field("hy-mt2-pro", description="小模型 id（网关接受小写连字符形式）")
     large_model: str = Field("hy3-preview", description="大模型 id（网关接受小写连字符形式）")
-    demo_mode: str = Field("auto", description="auto / true / false")
+    demo_mode: str = Field("false", description="auto / true / false（默认 false=必须真实 API；auto=失败降级 mock；true=强制 mock）")
     # 仅 /credentials/test 用：选择走 chat/completions 还是 responses
     # 默认 chat（与项目 HunyuanClient.scala 实际生产路径一致）；responses 只用于排查
     endpoint: str = Field(
@@ -141,6 +141,22 @@ def put_credentials(payload: CredentialsPayload, request: Request) -> dict:
     因此只有 api_key / base_url / 模型 id 真的变了才重启；
     仅 demo_mode 切换不需要重启（HunyuanClient 每次 invoke 都会现读 env）。
     """
+    # —— ApiKey / base_url 必须 ASCII：Authorization header 不允许非 ASCII ——
+    # 用户从错误提示里复制了 ✓ ✗ ⚠ 等图标会触发，这里提前阻断，避免写进 .env
+    # 后导致后续每次 AI 函数调用都炸（比"测试连接炸一次"难发现得多）
+    for field, val in (("api_key", payload.api_key), ("base_url", payload.base_url)):
+        try:
+            (val or "").encode("ascii")
+        except UnicodeEncodeError as ue:
+            bad_char = (val or "")[ue.start : ue.start + 1]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{field} 含非 ASCII 字符 {bad_char!r}（位置 {ue.start}）；"
+                    "通常是从错误提示里把 ✓ ✗ ⚠ 等图标一起复制了，请重新粘贴纯字符串。"
+                ),
+            )
+
     base_url = _normalize_base(payload.base_url)
     # 用户可能写 Hy3 preview / Hy-MT2-Pro 友好名 → 规范成网关 id
     small_id = normalize(payload.small_model, default="hy-mt2-pro")
@@ -222,6 +238,22 @@ def test_credentials(payload: CredentialsPayload) -> TestResponse:
             ok=False,
             error_code="BASE_URL_EMPTY",
             error_message="请填写 OpenAI 兼容 base_url（如 https://tokenhub.tencentmaas.com/v1）",
+            elapsed_ms=0,
+        )
+    # ApiKey 必须 ASCII（Authorization header 不允许非 ASCII，否则 httpx 会抛
+    # 'ascii' codec can't encode character ...，用户拿到栈错误一头雾水）
+    try:
+        (payload.api_key or "").encode("ascii")
+    except UnicodeEncodeError as ue:
+        bad_char = (payload.api_key or "")[ue.start : ue.start + 1]
+        return TestResponse(
+            ok=False,
+            error_code="API_KEY_NON_ASCII",
+            error_message=(
+                f"ApiKey 含非 ASCII 字符 {bad_char!r}（位置 {ue.start}），"
+                "通常是从错误提示里把 ✓ ✗ ⚠ 等图标一起复制了。"
+                "请只保留 sk- 开头的纯字母数字 Key 重新粘贴。"
+            ),
             elapsed_ms=0,
         )
 
