@@ -47,6 +47,12 @@ class CredentialsPayload(BaseModel):
     small_model: str = Field("hy-mt2-pro", description="小模型 id（网关接受小写连字符形式）")
     large_model: str = Field("hy3-preview", description="大模型 id（网关接受小写连字符形式）")
     demo_mode: str = Field("auto", description="auto / true / false")
+    # 仅 /credentials/test 用：选择走 chat/completions 还是 responses
+    # 默认 chat（与项目 HunyuanClient.scala 实际生产路径一致）；responses 只用于排查
+    endpoint: str = Field(
+        "chat",
+        description="测试接口类型：chat=/chat/completions（默认，生产路径）/ responses=/v1/responses（OpenAI 新接口）",
+    )
 
 
 class TestResponse(BaseModel):
@@ -220,20 +226,37 @@ def test_credentials(payload: CredentialsPayload) -> TestResponse:
         )
 
     base_url = _normalize_base(payload.base_url)
-    body = {
-        "model": normalize(payload.small_model, default="hy-mt2-pro"),
-        "messages": [
-            {"role": "user", "content": "请用一句话回复：你好，混元。"}
-        ],
-        "stream": False,
-        "temperature": 0.0,
-    }
+    model_id = normalize(payload.small_model, default="hy-mt2-pro")
+    endpoint = (payload.endpoint or "chat").strip().lower()
+
+    # —— 按 endpoint 分两套请求体 / URL ——
+    if endpoint == "responses":
+        # OpenAI 新版 Responses API：/v1/responses
+        # 文档：https://platform.openai.com/docs/api-reference/responses
+        body = {
+            "model": model_id,
+            "instructions": "You are a helpful assistant.",
+            "input": "请用一句话回复：你好，混元。",
+            "stream": False,
+        }
+        url = f"{base_url}/responses"
+    else:
+        # 默认：Chat Completions（与 HunyuanClient.scala 生产路径一致）
+        body = {
+            "model": model_id,
+            "messages": [
+                {"role": "user", "content": "请用一句话回复：你好，混元。"}
+            ],
+            "stream": False,
+            "temperature": 0.0,
+        }
+        url = f"{base_url}/chat/completions"
+
     payload_str = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
     headers = {
         "Authorization": f"Bearer {payload.api_key}",
         "Content-Type": "application/json; charset=utf-8",
     }
-    url = f"{base_url}/chat/completions"
 
     t0 = time.perf_counter()
     try:
@@ -272,10 +295,26 @@ def test_credentials(payload: CredentialsPayload) -> TestResponse:
                 elapsed_ms=elapsed_ms,
                 raw=data if isinstance(data, dict) else None,
             )
-        choices = data.get("choices") or []
+
+        # —— 按 endpoint 分两套响应解析 ——
         text = ""
-        if choices:
-            text = (choices[0].get("message") or {}).get("content", "")
+        if endpoint == "responses":
+            # Responses API 结构：output[0].content[0].text
+            outputs = data.get("output") or []
+            for out in outputs:
+                if out.get("type") == "message":
+                    for c in out.get("content") or []:
+                        if c.get("type") in ("output_text", "text") and c.get("text"):
+                            text = c["text"]
+                            break
+                    if text:
+                        break
+        else:
+            # Chat Completions 结构：choices[0].message.content
+            choices = data.get("choices") or []
+            if choices:
+                text = (choices[0].get("message") or {}).get("content", "") or ""
+
         return TestResponse(
             ok=True,
             request_id=data.get("id") or req_id,

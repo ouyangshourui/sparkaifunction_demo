@@ -132,6 +132,8 @@ export interface CredentialsPayload {
   small_model: string;
   large_model: string;
   demo_mode: string;
+  // 仅 testCredentials 用：选择测哪个接口；不传 = chat（默认，与生产路径一致）
+  endpoint?: "chat" | "responses";
 }
 
 export interface TestResponse {

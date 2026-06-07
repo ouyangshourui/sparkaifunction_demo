@@ -43,12 +43,28 @@ const initial: CredentialsPayload = {
   demo_mode: "auto",
 };
 
+// 测试连接的接口选择（只影响 /api/credentials/test，不影响生产路径）
+type TestEndpoint = "chat" | "responses";
+const ENDPOINT_INFO: Record<TestEndpoint, { label: string; path: string; desc: string }> = {
+  chat: {
+    label: "Chat Completions",
+    path: "/chat/completions",
+    desc: "项目实际生产路径（HunyuanClient.scala 走这个）",
+  },
+  responses: {
+    label: "Responses API",
+    path: "/v1/responses",
+    desc: "OpenAI 新接口，仅用于排查 Key 在 /v1/responses 是否同样可用",
+  },
+};
+
 export default function Settings() {
   const [view, setView] = useState<CredentialsView | null>(null);
   const [form, setForm] = useState<CredentialsPayload>(initial);
   const [test, setTest] = useState<TestResponse | null>(null);
   const [busy, setBusy] = useState<"" | "save" | "test">("");
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [testEndpoint, setTestEndpoint] = useState<TestEndpoint>("chat");
 
   const refresh = async () => {
     try {
@@ -107,12 +123,12 @@ export default function Settings() {
     setBusy("test");
     setTest(null);
     try {
-      const r = await testCredentials(form);
+      const r = await testCredentials({ ...form, endpoint: testEndpoint });
       setTest(r);
       if (r.ok) {
         setMsg({
           kind: "ok",
-          text: `✓ 真实调用成功（${r.elapsed_ms} ms）id=${r.request_id ?? "-"}`,
+          text: `✓ ${ENDPOINT_INFO[testEndpoint].label} 调用成功（${r.elapsed_ms} ms）id=${r.request_id ?? "-"}`,
         });
       } else {
         setMsg({
@@ -279,13 +295,38 @@ export default function Settings() {
           </Field>
         </div>
 
+        {/* 测试连接的接口选择（只影响测试，不影响生产路径） */}
+        <div>
+          <div className="text-textSub text-xs mb-1">
+            测试接口（只影响「测试连接」按钮，不影响 ai_classify 等函数的生产路径）
+          </div>
+          <div className="flex gap-1.5">
+            {(["chat", "responses"] as TestEndpoint[]).map((ep) => (
+              <button
+                key={ep}
+                type="button"
+                onClick={() => setTestEndpoint(ep)}
+                className={`flex-1 px-3 py-1.5 rounded border text-xs text-left ${
+                  testEndpoint === ep
+                    ? "border-teal text-teal bg-teal/5"
+                    : "border-border text-textSub hover:text-teal hover:border-teal"
+                }`}
+              >
+                <div className="font-semibold">{ENDPOINT_INFO[ep].label}</div>
+                <div className="font-mono text-[10px] opacity-75">{ENDPOINT_INFO[ep].path}</div>
+                <div className="text-[10px] opacity-60 mt-0.5">{ENDPOINT_INFO[ep].desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="flex gap-2 mt-2">
           <button
             disabled={busy !== ""}
             onClick={onTest}
             className="px-4 py-1.5 rounded border border-teal text-teal hover:bg-teal hover:text-white text-sm font-semibold disabled:opacity-50"
           >
-            {busy === "test" ? "调用中…" : "测试连接"}
+            {busy === "test" ? "调用中…" : `测试连接 · ${ENDPOINT_INFO[testEndpoint].label}`}
           </button>
           <button
             disabled={busy !== ""}
@@ -316,7 +357,7 @@ export default function Settings() {
         {!test && (
           <div className="text-textSub text-xs">
             点击左侧「测试连接」会用 <code>{form.small_model}</code> 走一次真实
-            <code className="px-1">POST {form.base_url || "<base_url>"}/chat/completions</code>
+            <code className="px-1">POST {form.base_url || "<base_url>"}{ENDPOINT_INFO[testEndpoint].path}</code>
             ，返回原始 JSON。
           </div>
         )}
