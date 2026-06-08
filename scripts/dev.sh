@@ -89,12 +89,30 @@ if ! command -v mvn >/dev/null 2>&1; then
 fi
 ok "mvn $(mvn -v 2>/dev/null | head -1 | awk '{print $3}')"
 
-# 3) Node（前端 dev server 用）
+# 3) Node（前端 dev server 用）—— 缺失时只警告，不退出（backend 仍可独立跑）
+HAS_NODE=0
+# 优先 PATH，再尝试 nvm / codebuddy 内置 node（按版本号倒序选最新）
 if ! command -v node >/dev/null 2>&1; then
-  err "未找到 node（推荐 brew install node 或 nvm）"
-  exit 1
+  for cand in \
+    "$HOME/.nvm/versions/node/"*/bin \
+    "$HOME/.workbuddy/binaries/node/versions/"*/bin \
+    "/opt/homebrew/bin" \
+    "/usr/local/bin"
+  do
+    # shellcheck disable=SC2086
+    if [[ -x "$cand/node" ]]; then
+      export PATH="$cand:$PATH"
+      info "auto-detected node: $cand/node"
+      break
+    fi
+  done
 fi
-ok "node $(node -v)"
+if command -v node >/dev/null 2>&1; then
+  ok "node $(node -v)"
+  HAS_NODE=1
+else
+  warn "未找到 node：本次将只启 backend，跳过 frontend（如需前端: brew install node 或 source ~/.nvm/nvm.sh）"
+fi
 
 # 4) backend/.env
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -154,6 +172,20 @@ if pgrep -f "vite --port $FRONTEND_PORT" >/dev/null 2>&1; then
 fi
 sleep 1.5
 
+# —— 端口占用兜底：进程没匹配上 pgrep 但端口仍占（如曾经被 kill -9 残留 / 别的工具占用）——
+# 解决场景：用户手动 nohup 启过 backend 不带 'uvicorn app.main' 字面、或被外部进程占
+# 注意：脚本开了 set -euo pipefail，lsof 查不到时会退非 0，所以单独 run 加 || true
+for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+  pid=$( (lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true) | head -1 || true )
+  if [[ -n "${pid:-}" ]]; then
+    cmd=$(ps -o command= -p "$pid" 2>/dev/null | head -c 80 || true)
+    warn "端口 $port 仍被 pid=$pid 占用：$cmd"
+    warn "   强制 kill -9 $pid"
+    kill -9 "$pid" 2>/dev/null || true
+    sleep 0.5
+  fi
+done
+
 # —— 启动后端 ——
 echo ""
 echo "=== 启动服务 ==="
@@ -179,23 +211,32 @@ for i in $(seq 1 30); do
   fi
 done
 
-# —— 启动前端 ——
-info "frontend → 后台 + disown · 日志 $LOG_DIR/frontend.log"
-( cd "$DIR/frontend" && \
-  ( [[ -d node_modules ]] || npm install --silent ) && \
-  nohup npm run dev -- --port "$FRONTEND_PORT" \
-    > "$LOG_DIR/frontend.log" 2>&1 ) &
-FRONTEND_PID=$!
-disown $FRONTEND_PID 2>/dev/null || true
-
-info "等待 frontend 就绪（最多 15s）..."
-for i in $(seq 1 15); do
+# —— 启动前端（仅当 node 可用时）——
+if [[ $HAS_NODE -eq 1 ]]; then
+  # 如果 49193 已有 vite 在跑，则跳过（避免重复 npm install / 端口冲突）
   if curl -fsS --max-time 1 -I "http://127.0.0.1:$FRONTEND_PORT" >/dev/null 2>&1; then
-    ok "frontend ready · http://127.0.0.1:$FRONTEND_PORT"
-    break
+    ok "frontend already running · http://127.0.0.1:$FRONTEND_PORT （跳过启动）"
+  else
+    info "frontend → 后台 + disown · 日志 $LOG_DIR/frontend.log"
+    ( cd "$DIR/frontend" && \
+      ( [[ -d node_modules ]] || npm install --silent ) && \
+      nohup npm run dev -- --port "$FRONTEND_PORT" \
+        > "$LOG_DIR/frontend.log" 2>&1 ) &
+    FRONTEND_PID=$!
+    disown $FRONTEND_PID 2>/dev/null || true
+
+    info "等待 frontend 就绪（最多 15s）..."
+    for i in $(seq 1 15); do
+      if curl -fsS --max-time 1 -I "http://127.0.0.1:$FRONTEND_PORT" >/dev/null 2>&1; then
+        ok "frontend ready · http://127.0.0.1:$FRONTEND_PORT"
+        break
+      fi
+      sleep 1
+    done
   fi
-  sleep 1
-done
+else
+  info "frontend 启动已跳过（无 node）。如需访问 UI 请先 brew install node 后再跑一次 bash scripts/dev.sh"
+fi
 
 # —— 总结 ——
 echo ""
